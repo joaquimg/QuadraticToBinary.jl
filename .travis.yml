@@ -1,12 +1,10 @@
 language: julia
 os:
-- osx
-#- windows
+  - linux
 julia:
-- 1.0
-- 1.2
-- 1.3
-- nightly
+  - 1.0
+  - 1.3
+  - nightly
 codecov: true
 notifications:
   email: false
