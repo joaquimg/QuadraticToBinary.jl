@@ -196,12 +196,63 @@ function delete_quadratic!(model::Optimizer, ci::CI{F,S}
     delete!(model.ci_to_quad_vector, ci)
 end
 function get_indices(model::Optimizer, ::Type{F}
-    ) where {F<:MOI.ScalarQuadraticFunction{T}} where T
+    ) where {F<:Union{
+        MOI.ScalarQuadraticFunction{T},
+        MOI.ScalarAffineFunction{T},
+        }} where T
     keys(model.ci_to_quad_scalar)
 end
 function get_indices(model::Optimizer, ::Type{F}
-    ) where {F<:MOI.VectorQuadraticFunction{T}} where T
+    ) where {F<:Union{
+        MOI.VectorQuadraticFunction{T},
+        MOI.VectorAffineFunction{T},
+        }} where T
     keys(model.ci_to_quad_vector)
+end
+
+# MOI.supports(model::Optimizer, args...) = MOI.supports(model.optimizer, args...)
+
+function MOI.supports(model::Optimizer, attr::MOI.VariableName, tp::Type{MOI.VariableIndex})
+    MOI.supports(model.optimizer, attr, tp)
+end
+function MOI.supports(model::Optimizer, attr::MOI.ConstraintName,
+    tb::Type{<:MOI.ConstraintIndex{F,S}}) where {
+        F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
+    return MOI.supports(model.optimizer, attr, tb)
+end
+function MOI.supports(model::Optimizer, attr::MOI.ConstraintName,
+    tb::Type{<:MOI.ConstraintIndex{F,S}}) where {
+        F<:QuadraticFunction,S<:MOI.AbstractSet}
+    return MOI.supports(model.optimizer, attr, MOI.ConstraintIndex{affine_type(F),S})
+end
+function MOI.supports(model::Optimizer, attr::Union{
+    MOI.Name,
+    MOI.Silent,
+    MOI.NumberOfThreads,
+    MOI.TimeLimitSec,
+    MOI.RawParameter,
+}
+)
+    return MOI.supports(model.optimizer, attr)
+end
+function MOI.get(model::Optimizer, attr::Union{
+    MOI.Name,
+    MOI.Silent,
+    MOI.NumberOfThreads,
+    MOI.TimeLimitSec,
+    MOI.RawParameter,
+}
+)
+    return MOI.get(model.optimizer, attr)
+end
+function MOI.set(model::Optimizer, attr::Union{
+    MOI.Name,
+    MOI.Silent,
+    MOI.NumberOfThreads,
+    MOI.TimeLimitSec,
+}, val
+)
+    return MOI.set(model.optimizer, attr, val)
 end
 
 function MOI.supports(model::Optimizer,
@@ -224,6 +275,7 @@ function MOI.supports_constraint(model::Optimizer,
 end
 function MOI.supports_constraint(model::Optimizer,
     F::Type{<:QuadraticFunction{T}}, S::Type{<:MOI.AbstractSet}) where T
+    # TODO additional constraints must be tested
     return MOI.supports_constraint(model.optimizer, affine_type(F), S)
 end
 affine_type(::MOI.ScalarQuadraticFunction{T}) where T = MOI.ScalarAffineFunction{T}
@@ -252,7 +304,9 @@ end
 # function MOI.get(model::Optimizer, param::MOI.RawParameter)
 # end
 
-MOI.Utilities.supports_default_copy_to(::Optimizer, ::Bool) = false
+function MOI.Utilities.supports_default_copy_to(model::Optimizer, val::Bool)
+    return MOI.Utilities.supports_default_copy_to(model.optimizer, val)
+end
 
 function MOI.copy_to(dest::Optimizer, src::MOI.ModelLike; kwargs...)
     return MOI.Utilities.automatic_copy_to(dest, src; kwargs...)
@@ -335,7 +389,14 @@ function MOI.get(
     attr::MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{T}}
 ) where T
     if model.quad_obj === nothing
-        error()
+        f = MOI.get(model.optimizer,
+            MOI.ObjectiveFunction{MOI.ScalarAffineFunction{T}}()
+        )
+        MOI.ScalarQuadraticFunction{T}(
+            f.terms,
+            MOI.ScalarQuadraticTerm{T}[],
+            f.constant
+        )
     else
         return copy(model.quad_obj)
     end
@@ -371,13 +432,24 @@ function MOI.get(
     model::Optimizer, attr::MOI.ConstraintSet,
     ci::MOI.ConstraintIndex{F, S}
 ) where {F, S}
-    return MOI.get(model.optimizer, attr, affine_index(ci))
+    aci = affine_index(ci)
+    if MOI.is_valid(model.optimizer, aci)
+        return MOI.get(model.optimizer, attr, aci)
+    else
+        return throw(MOI.InvalidIndex(ci))
+    end
 end
 function MOI.set(
     model::Optimizer, attr::MOI.ConstraintSet,
     ci::MOI.ConstraintIndex{F, S}, s
 ) where {F, S}
-    return MOI.set(model.optimizer, attr, affine_index(ci), s)
+    # TODO improve - only need for quads
+    aci = affine_index(ci)
+    if MOI.is_valid(model.optimizer, aci)
+        return MOI.set(model.optimizer, attr, aci, s)
+    else
+        return throw(MOI.InvalidIndex(ci))
+    end
 end
 
 function MOI.get(model::Optimizer, attr::MOI.ConstraintFunction,
@@ -390,7 +462,13 @@ function MOI.set(model::Optimizer, attr::MOI.ConstraintFunction,
 end
 function MOI.get(model::Optimizer, attr::MOI.ConstraintFunction,
     ci::MOI.ConstraintIndex{F, S}) where {F<:QuadraticFunction{T}, S} where T
-    return get_quadratic(model, ci)
+    # TODO improve
+    aci = affine_index(ci)
+    if MOI.is_valid(model.optimizer, aci)
+        return get_quadratic(model, ci)
+    else
+        return throw(MOI.InvalidIndex(ci))
+    end
 end
 function MOI.set(model::Optimizer, attr::MOI.ConstraintFunction,
     ci::MOI.ConstraintIndex{F, S}, f) where {F<:QuadraticFunction{T}, S} where T
@@ -399,24 +477,24 @@ function MOI.set(model::Optimizer, attr::MOI.ConstraintFunction,
 end
 
 function MOI.add_constraint(model::Optimizer, f::F, s::S
-) where {F, S}
+) where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
     ci = MOI.add_constraint(model.optimizer, f, s)
-    return affine_index(ci)
+    return ci
 end
 function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
 ) where {F, S}
     cis = MOI.add_constraints(model.optimizer, f, s)
-    return affine_index.(cis)
+    return cis
 end
 function MOI.add_constraint(model::Optimizer, f::F, s::S
-) where {F<:QuadraticFunction{T}, S<:SCALAR_SETS} where T
+) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
     ci = MOI.add_constraint(model.optimizer, convert_to_affine(model, f), s)
     qci = quad_index(ci)
     store_quadratic!(model, qci, f)
     return qci
 end
 function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
-) where {F<:QuadraticFunction{T}, S} where T
+) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
     cis = MOI.add_constraints(model.optimizer, convert_to_affine.(model, f), s)
     qcis = quad_index.(cis)
     for i in eachindex(cis)
@@ -428,18 +506,36 @@ end
 function MOI.delete(
     model::Optimizer,
     ci::MOI.ConstraintIndex{F, S}
-) where {F, S}
+) where {F<:QuadraticFunction, S<:MOI.AbstractSet}
     delete_quadratic!(model, ci)
-    MOI.delete(model.optimizer, affine_index(ci))
+    aci = affine_index(ci)
+    if MOI.is_valid(model.optimizer, aci)
+        MOI.delete(model.optimizer, aci)
+    else
+        return throw(MOI.InvalidIndex(ci))
+    end
 end
 
-function MOI.get(model::Optimizer, attr::MOI.ConstraintName, ci::Type{MOI.ConstraintIndex})
+function MOI.delete(
+    model::Optimizer,
+    ci::MOI.ConstraintIndex{F, S}
+) where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
+    MOI.delete(model.optimizer, ci)
+end
+
+# function MOI.get(model::Optimizer, attr::MOI.ConstraintName, ci::Type{MOI.ConstraintIndex})
+#     return MOI.get(model.optimizer, attr, affine_index(ci))
+# end
+function MOI.get(model::Optimizer, attr::MOI.ConstraintName, ci::MOI.ConstraintIndex)
     return MOI.get(model.optimizer, attr, affine_index(ci))
 end
-function MOI.set(model::Optimizer, attr::MOI.ConstraintName, ci::Type{MOI.ConstraintIndex}, name::String)
+# function MOI.set(model::Optimizer, attr::MOI.ConstraintName, ci::Type{MOI.ConstraintIndex}, name::String)
+#     return MOI.set(model.optimizer, attr, affine_index(ci), name)
+# end
+function MOI.set(model::Optimizer, attr::MOI.ConstraintName, ci::MOI.ConstraintIndex, name::String)
     return MOI.set(model.optimizer, attr, affine_index(ci), name)
 end
-function MOI.get(model::Optimizer, attr::Type{MOI.ConstraintIndex}, name::String)
+function MOI.get(model::Optimizer, attr::Type{<:MOI.ConstraintIndex}, name::String)
     return quad_index(MOI.get(model.optimizer, attr, name), attr)
 end
 
@@ -452,6 +548,9 @@ function affine_index(ci::MOI.ConstraintIndex{F, S}) where
 end
 function quad_index(ci::MOI.ConstraintIndex{F, S}) where {F,S}
     return CI{quadratic_type(F),S}(ci.value)
+end
+function quad_index(ci::Nothing, G)
+    return ci
 end
 function quad_index(ci::MOI.ConstraintIndex{F, S}, G) where {F,S}
     return ci
@@ -670,8 +769,8 @@ function MOI.delete(model::Optimizer,
     return
 end
 
-scalar_type(S::MOI.ZeroOne) = BINARY
-scalar_type(S::MOI.Integer) = INTEGER
+scalar_type(S::Type{MOI.ZeroOne}) = BINARY
+scalar_type(S::Type{MOI.Integer}) = INTEGER
 function MOI.add_constraints(
     model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
 ) where {S <: SCALAR_TYPES}
@@ -1022,8 +1121,8 @@ function MOI.optimize!(model::Optimizer)
 end
 
 
-function MOI.get(model::Optimizer, ::MOI.VariablePrimal, vi::VI)
-    return MOI.get(model.optimizer, MOI.VariablePrimal(), vi)
+function MOI.get(model::Optimizer, attr::MOI.VariablePrimal, vi::VI)
+    return MOI.get(model.optimizer, attr, vi)
 end
 
 function MOI.get(model::Optimizer, ::MOI.ConstraintDual, 
@@ -1031,23 +1130,23 @@ function MOI.get(model::Optimizer, ::MOI.ConstraintDual,
     error("No duals available")
 end
 
-function MOI.get(model::Optimizer, ::MOI.ConstraintPrimal, 
+function MOI.get(model::Optimizer, attr::MOI.ConstraintPrimal, 
                  ci::CI{F,S}) where {F, S}
-    return MOI.get(model.optimizer, MOI.ConstraintPrimal(), ci)
+    return MOI.get(model.optimizer, attr, ci)
 end
-function MOI.get(model::Optimizer, ::MOI.ConstraintPrimal, 
+function MOI.get(model::Optimizer, attr::MOI.ConstraintPrimal, 
     ci::CI{F,S}) where {F <: QuadraticFunction{T}, S} where T
-    return MOI.get(model.optimizer, MOI.ConstraintPrimal(), affine_index(ci))
+    return MOI.get(model.optimizer, attr, affine_index(ci))
 end
 
-function MOI.get(model::Optimizer, ::T) where {
+function MOI.get(model::Optimizer, attr::T) where {
     T <: Union{
         MOI.TerminationStatus,
         MOI.ObjectiveValue,
         MOI.PrimalStatus,
     }
 }
-    return MOI.get(model.optimizer, T())
+    return MOI.get(model.optimizer, attr)
 end
 
 function MOI.get(model::Optimizer, attr::Union{
@@ -1065,12 +1164,20 @@ end
 
 function MOI.get(
     model::Optimizer,
-    ::MOI.ListOfConstraintIndices{F, S}
+    attr::MOI.ListOfConstraintIndices{F, S}
 ) where {S, F<:Union{
-    MOI.ScalarAffineFunction{Float64},
-    MOI.VectorAffineFunction{Float64},
-    MOI.VectorOfVariables
+    MOI.VectorOfVariables,
+    MOI.SingleVariable,
 }}
+    return MOI.get(model.optimizer, attr)
+end
+function MOI.get(
+    model::Optimizer,
+    ::MOI.ListOfConstraintIndices{F, S}
+) where {S<:MOI.AbstractSet, F<:Union{
+    MOI.ScalarAffineFunction{T},
+    MOI.VectorAffineFunction{T},
+}} where T
     in_opt = MOI.get(model.optimizer, MOI.ListOfConstraintIndices{F, S}())
     quads = get_indices(model, F)
     return setdiff!(in_opt, affine_index.(quads))
@@ -1078,7 +1185,7 @@ end
 function MOI.get(
     model::Optimizer,
     ::MOI.ListOfConstraintIndices{F, S}
-) where {S, F<:Union{
+) where {S<:MOI.AbstractSet, F<:Union{
     MOI.ScalarQuadraticFunction{Float64},
     MOI.VectorQuadraticFunction{Float64},
 }}
@@ -1157,9 +1264,9 @@ function MOI.get(
     return model.global_initial_precision
 end
 
-function MOI.get(model::Optimizer, ::MOI.NumberOfConstraints{F, S}) where {F, S}
+function MOI.get(model::Optimizer, attr::MOI.NumberOfConstraints{F, S}) where {F, S}
     # TODO: this could be more efficient.
-    return length(MOI.get(model, MOI.ListOfConstraintIndices{F, S}()))
+    return length(MOI.get(model, MOI.ListOfConstraintIndices{F,S}()))
 end
 
 
@@ -1210,4 +1317,35 @@ function add_or_get_variable(model::Optimizer, pair)
         model.pair_to_var[pair] = var
         return var
     end
+end
+
+##
+## Modifications
+##
+
+function MOI.modify(
+    model::Optimizer,
+    mod::Union{
+        MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}},
+        MOI.ConstraintIndex{MOI.ScalarAffineFunction{Float64}, <:Any},
+    },
+    chg::Union{
+        MOI.ScalarConstantChange{Float64},
+        MOI.ScalarCoefficientChange{Float64},
+    }
+)
+    MOI.modify(model.optimizer, mod, chg)
+    return
+end
+function MOI.modify(
+    model::Optimizer,
+    mod::Union{
+        MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64}, <:Any},
+    },
+    chg::Union{
+        MOI.VectorConstantChange{Float64},
+    }
+)
+    MOI.modify(model.optimizer, mod, chg)
+    return
 end
