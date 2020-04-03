@@ -25,9 +25,9 @@ MIP solvers such as [Cbc](https://github.com/JuliaOpt/Cbc.jl), [CPLEX](https://g
 If one wants to solve the optimization problem with the package:
 
 ```julia
-    # Max 2x + y
-    # s.t. x * y <= 4 (c)
-    #      x, y >= 1
+# Max 2x + y
+# s.t. x * y <= 4 (c)
+#      x, y >= 1
 ```
 
 One should model as a quadratic program and simply wrap the solver with a
@@ -38,57 +38,98 @@ Therefore the new model can be:
 
 
 ```julia
-    # Max 2x + y
-    # s.t. x * y <= 4 (c)
-    #      x, y >= 1
-    #      x, y <= 10
+# Max 2x + y
+# s.t. x * y <= 4 (c)
+#      x, y >= 1
+#      x, y <= 10
 ```
 
-and in terms of MathOptInterface and Cbc as the inner solver:
+### JuMP with Cbc solver
 
 ```julia
-    using MathOptInterface
-    using QuadraticToBinary
-    const MOI = MathOptInterface
-    const MOIU = MOI.Utilities
-    using Cbc
+using JuMP
+using MathOptInterface
+using QuadraticToBinary
+using Cbc
 
-    const optimizer = MOI.Bridges.full_bridge_optimizer(
-        MOIU.CachingOptimizer(
-            MOIU.UniversalFallback(MOIU.Model{Float64}()),
-            Cbc.Optimizer()), Float64)
+const MOI = MathOptInterface
+const MOIU = MOI.Utilities
 
-    model = QuadraticToBinary.Optimizer{Float64}(optimizer)
+const optimizer = MOI.Bridges.full_bridge_optimizer(
+    MOIU.CachingOptimizer(
+        MOIU.UniversalFallback(MOIU.Model{Float64}()),
+        Cbc.Optimizer()), Float64)
 
-    x = MOI.add_variable(model)
-    y = MOI.add_variable(model)
+model = Model(
+    ()->QuadraticToBinary.Optimizer{Float64}(
+        optimizer))
 
-    MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
-    MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
+@variable(model, 1 <= x <= 10)
+@variable(model, 1 <= y <= 10)
 
-    MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
-    MOI.add_constraint(model, MOI.SingleVariable(y), MOI.LessThan(10.0))
+@constraint(model, c, x * y <= 4)
 
-    cf = MOI.ScalarQuadraticFunction(
-        [MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
-    c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
+@objective(model, Max, 2x + y)
 
-    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
-        MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
-    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+optimize!(model)
 
-    MOI.optimize!(model)
+termination_status(model)
 
-    MOI.get(model, MOI.TerminationStatus()) # config.optimal_status
+primal_status(model)
 
-    MOI.get(model, MOI.PrimalStatus()) # MOI.FEASIBLE_POINT
+objective_value(model) # ≈ 9.0
 
-    MOI.get(model, MOI.ObjectiveValue()) # ≈ 9.0
+value(x) # ≈ 4.0
+value(y) # ≈ 1.0
 
-    MOI.get(model, MOI.VariablePrimal(), x) # ≈ 4.0
-    MOI.get(model, MOI.VariablePrimal(), y) # ≈ 1.0
+value(c) # ≈ 4.0
+```
 
-    MOI.get(model, MOI.ConstraintPrimal(), c) # ≈ 4.0
+### MathOptInterface with Cbc solver
+
+```julia
+using MathOptInterface
+using QuadraticToBinary
+const MOI = MathOptInterface
+const MOIU = MOI.Utilities
+using Cbc
+
+const optimizer = MOI.Bridges.full_bridge_optimizer(
+    MOIU.CachingOptimizer(
+        MOIU.UniversalFallback(MOIU.Model{Float64}()),
+        Cbc.Optimizer()), Float64)
+
+model = QuadraticToBinary.Optimizer{Float64}(optimizer)
+
+x = MOI.add_variable(model)
+y = MOI.add_variable(model)
+
+MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
+MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
+
+MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
+MOI.add_constraint(model, MOI.SingleVariable(y), MOI.LessThan(10.0))
+
+cf = MOI.ScalarQuadraticFunction(
+    [MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
+c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
+
+MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
+    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
+MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+
+MOI.optimize!(model)
+
+MOI.get(model, MOI.TerminationStatus()) # config.optimal_status
+
+MOI.get(model, MOI.PrimalStatus()) # MOI.FEASIBLE_POINT
+
+MOI.get(model, MOI.ObjectiveValue()) # ≈ 9.0
+
+MOI.get(model, MOI.VariablePrimal(), x) # ≈ 4.0
+MOI.get(model, MOI.VariablePrimal(), y) # ≈ 1.0
+
+MOI.get(model, MOI.ConstraintPrimal(), c) # ≈ 4.0
 ```
 
 Note that duals are not available because the problem was approximated as a MIP.

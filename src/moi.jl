@@ -347,7 +347,7 @@ end
 # end
 
 function MOI.Utilities.supports_default_copy_to(model::Optimizer, val::Bool)
-    return MOI.Utilities.supports_default_copy_to(model.optimizer, val)
+    return true # val # MOI.Utilities.supports_default_copy_to(model.optimizer, val)
 end
 
 function MOI.copy_to(dest::Optimizer, src::MOI.ModelLike; kwargs...)
