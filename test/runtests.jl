@@ -23,6 +23,21 @@ const CONFIG = MOIT.TestConfig(duals = false, infeas_certificates = false)
     end
 end
 
+@testset "From MOI qcp" begin
+    for opt in optimizers
+        MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
+        MOI.set(MODEL, QuadraticToBinary.GlobalVariablePrecision(), 1e-4)
+        qcp1test_mod(MODEL, CONFIG_LOW_TOL)
+        qcp2test_mod(MODEL, CONFIG_LOW_TOL)
+        qcp3test_mod(MODEL, CONFIG_LOW_TOL)
+        qcp4test_mod(MODEL, CONFIG_LOW_TOL)
+        qcp5test_mod(MODEL, CONFIG_LOW_TOL)
+        #
+        MOI.set(MODEL, QuadraticToBinary.GlobalVariablePrecision(), 1e-5)
+        socp1test_mod(MODEL, CONFIG_LOW_TOL)
+    end
+end
+
 @testset "From MOI qp" begin
     for opt in optimizers
         MODEL = QuadraticToBinary.Optimizer{Float64}(opt)

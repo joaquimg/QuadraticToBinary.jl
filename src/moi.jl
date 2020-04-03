@@ -981,9 +981,11 @@ function build_approximation!(model::Optimizer)
     # Loops in the graph must be added to this cover
     for v in DS
         degree_queue[v] = 0
-        @inbounds @simd for u in neighbors[v]
-            if !(v in DS)#!in_cover[u] 
-                degree_queue[u] -= 1
+        if haskey(neighbors, v)
+            @inbounds @simd for u in neighbors[v]
+                if !(v in DS)#!in_cover[u] 
+                    degree_queue[u] -= 1
+                end
             end
         end
     end
