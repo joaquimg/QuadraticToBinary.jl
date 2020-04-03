@@ -1,3 +1,64 @@
+
+function ncqcp1test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
+    atol = config.atol
+    rtol = config.rtol
+    # Max 2x + y
+    # s.t. x * y <= 4 (c)
+    #      x, y >= 1
+
+    # @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
+    @test MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}())
+    @test MOI.supports_constraint(model, MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64})
+
+    MOI.empty!(model)
+    @test MOI.is_empty(model)
+
+    x = MOI.add_variable(model)
+    y = MOI.add_variable(model)
+    @test MOI.get(model, MOI.NumberOfVariables()) == 2
+
+    vc1 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
+    @test vc1.value == x.value
+    vc2 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
+    @test vc2.value == y.value
+
+    vc3 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
+    @test vc3.value == x.value
+    vc4 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.LessThan(10.0))
+    @test vc4.value == y.value
+
+    cf = MOI.ScalarQuadraticFunction([MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
+    c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64}}()) == 1
+
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(), MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MAX_SENSE
+
+    if config.query
+        @test cf ≈ MOI.get(model, MOI.ConstraintFunction(), c)
+    end
+
+    if config.solve
+        @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
+
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 9.0 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.VariablePrimal(), x) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.VariablePrimal(), y) ≈ 1.0 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc1) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc2) ≈ 1.0 atol=atol rtol=rtol
+    end
+end
+
 function ncqcp2test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
     atol = config.atol
     rtol = config.rtol
@@ -60,44 +121,54 @@ function ncqcp2test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
     end
 end
 
-function ncqcp1test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
+function qp1test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
     atol = config.atol
     rtol = config.rtol
-    # Max 2x + y
-    # s.t. x * y <= 4 (c)
-    #      x, y >= 1
+    # homogeneous quadratic objective
+    # Min x^2 + xy + y^2 + yz + z^2
+    # st  x + 2y + 3z >= 4 (c1)
+    #     x +  y      >= 1 (c2)
+    #     x, y, z \in R
 
-    # @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
-    @test MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}())
-    @test MOI.supports_constraint(model, MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64})
+    @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
+    MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+    MOI.supports_constraint(model, MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64})
 
     MOI.empty!(model)
     @test MOI.is_empty(model)
 
-    x = MOI.add_variable(model)
-    y = MOI.add_variable(model)
-    @test MOI.get(model, MOI.NumberOfVariables()) == 2
+    v = MOI.add_variables(model, 3)
+    @test MOI.get(model, MOI.NumberOfVariables()) == 3
 
-    vc1 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
-    @test vc1.value == x.value
-    vc2 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
-    @test vc2.value == y.value
+    # begin new
+    for x in v
+        lb = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(-10.0))
+        ub = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
+        @test lb.value == x.value
+        @test ub.value == x.value
+    end
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.SingleVariable, MOI.GreaterThan{Float64}}()) == 3
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.SingleVariable, MOI.LessThan{Float64}}()) == 3
+    # end new
 
-    vc3 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
-    @test vc3.value == x.value
-    vc4 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.LessThan(10.0))
-    @test vc4.value == y.value
+    cf1 = MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,2.0,3.0], v), 0.0)
+    c1 = MOI.add_constraint(model, cf1, MOI.GreaterThan(4.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64}}()) == 1
 
-    cf = MOI.ScalarQuadraticFunction([MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
-    c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
-    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64}}()) == 1
+    c2 = MOI.add_constraint(model, MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,1.0], [v[1],v[2]]), 0.0), MOI.GreaterThan(1.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64}}()) == 2
 
-    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(), MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
-    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
-    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MAX_SENSE
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MIN_SENSE)
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MIN_SENSE
+    obj = MOI.ScalarQuadraticFunction(MOI.ScalarAffineTerm{Float64}[], MOI.ScalarQuadraticTerm.([2.0, 1.0, 2.0, 1.0, 2.0], v[[1,1,2,2,3]], v[[1,2,2,3,3]]), 0.0)
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}(), obj)
 
     if config.query
-        @test cf ≈ MOI.get(model, MOI.ConstraintFunction(), c)
+        @test obj ≈ MOI.get(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+
+        @test cf1 ≈ MOI.get(model, MOI.ConstraintFunction(), c1)
+
+        @test MOI.GreaterThan(4.0) == MOI.get(model, MOI.ConstraintSet(), c1)
     end
 
     if config.solve
@@ -109,13 +180,224 @@ function ncqcp1test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
 
         @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
 
-        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 9.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 13/7 atol=atol rtol=rtol
 
-        @test MOI.get(model, MOI.VariablePrimal(), x) ≈ 4.0 atol=atol rtol=rtol
-        @test MOI.get(model, MOI.VariablePrimal(), y) ≈ 1.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.VariablePrimal(), v) ≈ [4/7, 3/7, 6/7] atol=atol rtol=rtol
 
-        @test MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0 atol=atol rtol=rtol
-        @test MOI.get(model, MOI.ConstraintPrimal(), vc1) ≈ 4.0 atol=atol rtol=rtol
-        @test MOI.get(model, MOI.ConstraintPrimal(), vc2) ≈ 1.0 atol=atol rtol=rtol
+        if config.duals
+            @test MOI.get(model, MOI.DualStatus()) == MOI.FEASIBLE_POINT
+            # The dual constraint gives
+            # [λ_c1 + λ_c2, 2λ_c1 + λ_c2, 3λ_c1] = [2 1 0; 1 2 1; 0 1 2] * x
+            #                                    = [11, 16, 15] / 7
+            # hence λ_c1 = 5/7 and λ_c2 = 6/7.
+            @test MOI.get(model, MOI.ConstraintDual(), c1) ≈ 5/7 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), c2) ≈ 6/7 atol=atol rtol=rtol
+        end
+    end
+end
+
+function qp2test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
+    atol = config.atol
+    rtol = config.rtol
+    # Same as `qp1` but with duplicate terms then change the objective and sense
+    # simple quadratic objective
+    # Min x^2 + xy + y^2 + yz + z^2
+    # st  x + 2y + 3z >= 4 (c1)
+    #     x +  y      >= 1 (c2)
+    #     x, y, z \in R
+
+    @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
+    @test MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+    @test MOI.supports_constraint(model, MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64})
+
+    MOI.empty!(model)
+    @test MOI.is_empty(model)
+
+    v = MOI.add_variables(model, 3)
+    @test MOI.get(model, MOI.NumberOfVariables()) == 3
+
+    # begin new
+    for x in v
+        lb = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(-10.0))
+        ub = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
+        @test lb.value == x.value
+        @test ub.value == x.value
+    end
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.SingleVariable, MOI.GreaterThan{Float64}}()) == 3
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.SingleVariable, MOI.LessThan{Float64}}()) == 3
+    # end new
+
+    c1f = MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,2.0,3.0], v), 0.0)
+    c1 = MOI.add_constraint(model, c1f, MOI.GreaterThan(4.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64}}()) == 1
+
+    c2 = MOI.add_constraint(model, MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,1.0], [v[1],v[2]]), 0.0), MOI.GreaterThan(1.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.ScalarAffineFunction{Float64}, MOI.GreaterThan{Float64}}()) == 2
+
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MIN_SENSE)
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MIN_SENSE
+    obj = MOI.ScalarQuadraticFunction(MOI.ScalarAffineTerm.(0.0, v), MOI.ScalarQuadraticTerm.([2.0, 0.5, 0.5, 2.0, 1.0, 1.0, 1.0], [v[1], v[1], v[1], v[2], v[2], v[3], v[3]], [v[1], v[2], v[2], v[2], v[3], v[3], v[3]]), 0.0)
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}(), obj)
+
+    if config.query
+        @test obj ≈ MOI.get(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+
+        @test c1f ≈ MOI.get(model, MOI.ConstraintFunction(), c1)
+
+        @test MOI.GreaterThan(4.0) == MOI.get(model, MOI.ConstraintSet(), c1)
+    end
+
+    if config.solve
+        @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
+
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 13/7 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.VariablePrimal(), v) ≈ [4/7,3/7,6/7] atol=atol rtol=rtol
+
+        if config.duals
+            @test MOI.get(model, MOI.DualStatus()) == MOI.FEASIBLE_POINT
+            @test MOI.get(model, MOI.ConstraintDual(), c1) ≈ 5/7 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), c2) ≈ 6/7 atol=atol rtol=rtol
+        end
+    end
+
+    # change objective to Max -2(x^2 + xy + y^2 + yz + z^2)
+    # First clear the objective, this is needed if a `Bridges.Objective.SlackBridge` is used.
+    MOI.set(model, MOI.ObjectiveSense(), MOI.FEASIBILITY_SENSE)
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MAX_SENSE
+    obj2 = MOI.ScalarQuadraticFunction(MOI.ScalarAffineTerm.(0.0, v), MOI.ScalarQuadraticTerm.([-4.0, -1.0, -1.0, -4.0, -2.0, -2.0, -2.0], [v[1], v[1], v[1], v[2], v[2], v[3], v[3]], [v[1], v[2], v[2], v[2], v[3], v[3], v[3]]), 0.0)
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}(), obj2)
+
+    if config.query
+        @test obj2 ≈ MOI.get(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+    end
+
+    if config.solve
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ -2*13/7 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.VariablePrimal(), v) ≈ [4/7, 3/7, 6/7] atol=atol rtol=rtol
+
+        if config.duals
+            @test MOI.get(model, MOI.DualStatus()) == MOI.FEASIBLE_POINT
+            @test MOI.get(model, MOI.ConstraintDual(), c1) ≈ 10/7 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), c2) ≈ 12/7 atol=atol rtol=rtol
+        end
+    end
+end
+
+function qp3test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
+    atol = config.atol
+    rtol = config.rtol
+    # non-homogeneous quadratic objective
+    #    minimize 2 x^2 + y^2 + xy + x + y + 1
+    #       s.t.  x, y >= 0
+    #             x + y = 1
+
+    @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
+    @test MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}())
+    MOI.supports_constraint(model, MOI.SingleVariable, MOI.GreaterThan{Float64})
+    MOI.supports_constraint(model, MOI.ScalarAffineFunction{Float64}, MOI.EqualTo{Float64})
+
+    MOI.empty!(model)
+    @test MOI.is_empty(model)
+
+    x = MOI.add_variable(model)
+    y = MOI.add_variable(model)
+
+    # begin new
+    for w in [x, y]
+        ub = MOI.add_constraint(model, MOI.SingleVariable(w), MOI.LessThan(10.0))
+        @test ub.value == w.value
+    end
+    @test MOI.get(model, MOI.NumberOfConstraints{MOI.SingleVariable, MOI.LessThan{Float64}}()) == 2
+    # end new
+
+    c1 = MOI.add_constraint(model,
+        MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([1.0,1.0], [x,y]), 0.0),
+        MOI.EqualTo(1.0)
+    )
+
+    vc1 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(0.0))
+    # We test this after the creation of every `SingleVariable` constraint
+    # to ensure a good coverage of corner cases.
+    @test vc1.value == x.value
+    vc2 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(0.0))
+    @test vc2.value == y.value
+
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MIN_SENSE)
+    obj = MOI.ScalarQuadraticFunction(
+        MOI.ScalarAffineTerm.([1.0, 1.0], [x, y]),
+        MOI.ScalarQuadraticTerm.([4.0, 2.0, 1.0], [x, y, x], [x, y, y]),
+        1.0
+    )
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarQuadraticFunction{Float64}}(), obj)
+
+    if config.solve
+        @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
+
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 2.875 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.VariablePrimal(), [x, y]) ≈ [0.25, 0.75] atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc1) ≈ 0.25 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc2) ≈ 0.75 atol=atol rtol=rtol
+
+        if config.duals
+            @test MOI.get(model, MOI.DualStatus()) == MOI.FEASIBLE_POINT
+            # The dual constraint gives [λ_vc1 + λ_c1, λ_vc2 + λ_c1] = [4 1; 1 2] * x + [1, 1] = [11, 11] / 4
+            # since `vc1` and `vc2` are not active, `λ_vc1` and `λ_vc2` are
+            # zero so `λ_c1 = 11/4`.
+            @test MOI.get(model, MOI.ConstraintDual(), c1) ≈ 11 / 4 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), vc1) ≈ 0 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), vc2) ≈ 0 atol=atol rtol=rtol
+        end
+    end
+
+    # change back to linear
+    #        max 2x + y + 1
+    #       s.t.  x, y >= 0
+    #             x + y = 1
+    # (x,y) = (1,0), obj = 3
+    # First clear the objective, this is needed if a `Bridges.Objective.SlackBridge` is used.
+    MOI.set(model, MOI.ObjectiveSense(), MOI.FEASIBILITY_SENSE)
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+    objf = MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 1.0)
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(), objf)
+
+    if config.solve
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 3.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.VariablePrimal(), [x,y]) ≈ [1.0, 0.0] atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc1) ≈ 1.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc2) ≈ 0.0 atol=atol rtol=rtol
+
+        if config.duals
+            @test MOI.get(model, MOI.DualStatus()) == MOI.FEASIBLE_POINT
+            @test MOI.get(model, MOI.ConstraintDual(), c1) ≈ -2 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), vc1) ≈ 0 atol=atol rtol=rtol
+            @test MOI.get(model, MOI.ConstraintDual(), vc2) ≈ 1 atol=atol rtol=rtol
+        end
     end
 end
