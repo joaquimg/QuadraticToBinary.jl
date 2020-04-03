@@ -4,6 +4,12 @@ const MOIU = MOI.Utilities
 const VI = MOI.VariableIndex
 const CI = MOI.ConstraintIndex
 
+const SV = MOI.SingleVariable
+const SAF{T} = MOI.ScalarAffineFunction{T}
+const EQ{T} = MOI.EqualTo{T}
+const LT{T} = MOI.LessThan{T}
+const GT{T} = MOI.GreaterThan{T}
+
 # same as MOI except for quad stuff
 MOIU.@model(NonQuadraticModel,
        (MOI.ZeroOne, MOI.Integer),
@@ -110,6 +116,27 @@ const QuadraticFunction{T} = Union{
     MOI.VectorQuadraticFunction{T}
 }
 
+struct IndexDataCache{T}
+    vi   ::Vector{VI}
+    sa_eq::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.EqualTo{T}}}
+    sa_lt::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.LessThan{T}}}
+    sa_gt::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.GreaterThan{T}}}
+    sv_lt::Vector{CI{MOI.SingleVariable, MOI.LessThan{T}}}
+    sv_gt::Vector{CI{MOI.SingleVariable, MOI.GreaterThan{T}}}
+    sv_zo::Vector{CI{MOI.SingleVariable, MOI.ZeroOne}}
+    function IndexDataCache{T}() where T
+        new(
+            VI[],
+            CI{MOI.ScalarAffineFunction{T}, MOI.EqualTo{T}}[],
+            CI{MOI.ScalarAffineFunction{T}, MOI.LessThan{T}}[],
+            CI{MOI.ScalarAffineFunction{T}, MOI.GreaterThan{T}}[],
+            CI{MOI.SingleVariable, MOI.LessThan{T}}[],
+            CI{MOI.SingleVariable, MOI.GreaterThan{T}}[],
+            CI{MOI.SingleVariable, MOI.ZeroOne}[],
+        )
+    end
+end
+
 mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
     # model to be solved
     optimizer::OT # integer programming solver
@@ -133,6 +160,10 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
 
     pair_to_var::Dict{Tuple{VI,VI}, VI} # wij variable
 
+    index_cache::Union{Nothing, IndexDataCache{T}}
+
+    has_quad_change::Bool
+
     function Optimizer{T}(optimizer::OT) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
         return new{T, OT}(
@@ -143,9 +174,18 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
             Dict{CI, MOI.VectorQuadraticFunction{T}}(),
             Dict{VI, VariableInfo}(),
             Dict{CI, VI}(),
-            Dict{Tuple{VI,VI}, VI}()
+            Dict{Tuple{VI,VI}, VI}(),
+            nothing,
+            false
             )
     end
+end
+
+function set_quad_change(model)
+    model.has_quad_change = true
+end
+function unset_quad_change(model)
+    model.has_quad_change = true
 end
 
 function MOI.is_empty(model::Optimizer)
@@ -155,7 +195,8 @@ function MOI.is_empty(model::Optimizer)
     isempty(model.ci_to_quad_vector) &&
     isempty(model.original_variables) &&
     isempty(model.ci_to_var) &&
-    isempty(model.pair_to_var)
+    isempty(model.pair_to_var) &&
+    model.index_cache === nothing
 end
 
 function MOI.empty!(model::Optimizer{T}) where T
@@ -166,6 +207,7 @@ function MOI.empty!(model::Optimizer{T}) where T
     model.original_variables = Dict{VI, VariableInfo}()
     model.ci_to_var = Dict{CI, VI}()
     model.pair_to_var = Dict{Tuple{VI,VI}, VI}()
+    model.index_cache = nothing
     return
 end
 
@@ -338,6 +380,8 @@ end
 
 function MOI.delete(model::Optimizer, v::MOI.VariableIndex)
     #MOI.delete(model.quadratic_cache, v)
+    # set_quad_change(model)
+    # TODO do not delete if in quad
     return MOI.delete(model.optimizer, v)
 end
 
@@ -378,8 +422,10 @@ end
 function MOI.set(
     model::Optimizer, attr::MOI.ObjectiveFunction{F}, f::F
 ) where {F <: MOI.ScalarQuadraticFunction{T}} where T
-    model.quad_obj = f
-    f_new = convert_to_affine(model, f)
+    fc = MOIU.canonical(f)
+    model.quad_obj = fc
+    set_quad_change(model)
+    f_new = convert_to_affine(model, fc)
     MOI.set(model.optimizer, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{T}}(), f_new)
     return
 end
@@ -488,18 +534,22 @@ function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
 end
 function MOI.add_constraint(model::Optimizer, f::F, s::S
 ) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
-    ci = MOI.add_constraint(model.optimizer, convert_to_affine(model, f), s)
+    fc = MOIU.canonical(f)
+    ci = MOI.add_constraint(model.optimizer, convert_to_affine(model, fc), s)
     qci = quad_index(ci)
-    store_quadratic!(model, qci, f)
+    store_quadratic!(model, qci, fc)
+    set_quad_change(model)
     return qci
 end
 function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
 ) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
-    cis = MOI.add_constraints(model.optimizer, convert_to_affine.(model, f), s)
+    fc = MOIU.canonical.(f)
+    cis = MOI.add_constraints(model.optimizer, convert_to_affine.(model, fc), s)
     qcis = quad_index.(cis)
     for i in eachindex(cis)
-        store_quadratic!(model, qcis[i], f[i])
+        store_quadratic!(model, qcis[i], fc[i])
     end
+    set_quad_change(model)
     return qcis
 end
 
@@ -508,6 +558,7 @@ function MOI.delete(
     ci::MOI.ConstraintIndex{F, S}
 ) where {F<:QuadraticFunction, S<:MOI.AbstractSet}
     delete_quadratic!(model, ci)
+    set_quad_change(model)
     aci = affine_index(ci)
     if MOI.is_valid(model.optimizer, aci)
         MOI.delete(model.optimizer, aci)
@@ -813,6 +864,72 @@ function MOI.delete(model::Optimizer,
     return
 end
 
+function add_and_cache_variables(ch, optimizer, N)
+    vis = MOI.add_variables(optimizer, N)
+    append!(ch.vi, vis)
+    return vis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.ScalarAffineFunction{T}}, s::Vector{MOI.EqualTo{T}}) where T
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sa_eq, cis)
+    return cis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.ScalarAffineFunction{T}}, s::Vector{MOI.LessThan{T}}) where T
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sa_lt, cis)
+    return cis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.ScalarAffineFunction{T}}, s::Vector{MOI.GreaterThan{T}}) where T
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sa_gt, cis)
+    return cis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.SingleVariable}, s::Vector{MOI.LessThan{T}}) where T
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sv_lt, cis)
+    return cis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.SingleVariable}, s::Vector{MOI.GreaterThan{T}}) where T
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sv_gt, cis)
+    return cis
+end
+function add_and_cache_constraints(ch, optimizer,
+    f::Vector{MOI.SingleVariable}, s::Vector{MOI.ZeroOne})
+    cis = MOI.add_constraints(optimizer, f, s)
+    append!(ch.sv_zo, cis)
+    return cis
+end
+
+function delete_additional_constraints(model)
+    ch = model.index_cache
+    if true
+        MOI.delete(model.optimizer, ch.sa_eq)
+        MOI.delete(model.optimizer, ch.sa_lt)
+        MOI.delete(model.optimizer, ch.sa_gt)
+        MOI.delete(model.optimizer, ch.vi)
+    else
+        for ci in ch.sa_eq
+            MOI.delete(model.optimizer, ci)
+        end
+        for ci in ch.sa_lt
+            MOI.delete(model.optimizer, ci)
+        end
+        for ci in ch.sa_gt
+            MOI.delete(model.optimizer, ci)
+        end
+        for vi in ch.vi
+            MOI.delete(model.optimizer, vi)
+        end
+    end
+end
+
+
 lower(info) = info.type == BINARY ? zero(typeof(info.lower)) : info.lower
 upper(info) = info.type == BINARY ? one(typeof(info.lower)) : info.upper
 function get_precision(model::Optimizer{T}, x) where T
@@ -826,9 +943,15 @@ function get_precision(model::Optimizer{T}, x) where T
     @assert zero(T) < pre <= one(T)
     ceil(Int, -log2(pre))
 end
-function MOI.optimize!(model::Optimizer)
+function build_approximation!(model::Optimizer)
 
     T = Float64
+
+    if model.index_cache !== nothing
+        delete_additional_constraints(model)
+    end
+    ch = IndexDataCache{T}()
+    model.index_cache = ch
 
     QT = keys(model.pair_to_var)
 
@@ -890,9 +1013,8 @@ function MOI.optimize!(model::Optimizer)
         end
     end
 
-    QT = keys(model.pair_to_var)
     #
-    preΔx = MOI.add_variables(model.optimizer, length(DS))
+    preΔx = add_and_cache_variables(ch, model.optimizer, length(DS))
     Δx = Dict()
     for (i,v) in enumerate(DS)
         Δx[v] = preΔx[i]
@@ -900,7 +1022,7 @@ function MOI.optimize!(model::Optimizer)
     #
     w = model.pair_to_var
     #
-    preΔw = MOI.add_variables(model.optimizer, length(w))
+    preΔw = add_and_cache_variables(ch, model.optimizer, length(w))
     Δw = Dict()
     for (i,p) in enumerate(QT)
         Δw[p] = preΔw[i]
@@ -908,7 +1030,7 @@ function MOI.optimize!(model::Optimizer)
     #
     z = Dict()
     for v in DS
-        z[v] = MOI.add_variables(model.optimizer, get_precision(model, v))#VI[]
+        z[v] = add_and_cache_variables(ch, model.optimizer, get_precision(model, v))#VI[]
     end
     #
     xh = Dict()
@@ -920,14 +1042,14 @@ function MOI.optimize!(model::Optimizer)
             xi = xb
             xj = xa
         end
-        xh[(xa,xb)] = MOI.add_variables(model.optimizer, get_precision(model, xj))#VI[]
+        xh[(xa,xb)] = add_and_cache_variables(ch, model.optimizer, get_precision(model, xj))#VI[]
     end
 
     # zeros are useless in the paper
 
     # eq 28 - binary expansion of xj
-    f28 = []
-    s28 = []
+    f28 = SAF{T}[]
+    s28 = EQ{T}[]
     for xj in DS
         info = model.original_variables[xj]
         Xu = upper(info)
@@ -944,10 +1066,10 @@ function MOI.optimize!(model::Optimizer)
         push!(f28, MOI.ScalarAffineFunction(terms, zero(T)))
         push!(s28, MOI.EqualTo{T}(-Xl))
     end
-    c28 = MOI.add_constraints(model.optimizer, f28, s28)
+    c28 = add_and_cache_constraints(ch, model.optimizer, f28, s28)
 
     # eq 29 - binary expansion of the product
-    f29 = []
+    f29 = SAF{T}[]
     for (xa,xb) in QT
         if xb in DS
             xi = xa
@@ -973,32 +1095,32 @@ function MOI.optimize!(model::Optimizer)
         end
         push!(f29, MOI.ScalarAffineFunction(terms, zero(T)))
     end
-    s29 = [MOI.EqualTo{T}(zero(T)) for i in eachindex(f29)]
-    c29 = MOI.add_constraints(model.optimizer, f29, s29)
+    s29 = MOI.EqualTo{T}[MOI.EqualTo{T}(zero(T)) for i in eachindex(f29)]
+    c29 = add_and_cache_constraints(ch, model.optimizer, f29, s29)
 
     # eq 30 - bound on \Delta xj
-    f30a = []
-    f30b = []
-    s30b = []
+    f30a = SV[]
+    f30b = SV[]
+    s30b = LT{T}[]
     for xj in DS
         push!(f30a, MOI.SingleVariable(Δx[xj]))
         push!(f30b, MOI.SingleVariable(Δx[xj]))
         push!(s30b, MOI.LessThan{T}(T(2)^(-T(get_precision(model, xj)))))
     end
-    s30a = [MOI.GreaterThan{T}(zero(T)) for i in eachindex(f30a)]
-    c30a = MOI.add_constraints(model.optimizer, f30a, s30a)
-    c30b = MOI.add_constraints(model.optimizer, f30b, s30b)
+    s30a = MOI.GreaterThan{T}[MOI.GreaterThan{T}(zero(T)) for i in eachindex(f30a)]
+    c30a = add_and_cache_constraints(ch, model.optimizer, f30a, s30a)
+    c30b = add_and_cache_constraints(ch, model.optimizer, f30b, s30b)
 
     # eq 31 - McCormick in \Delta wij
-    f31a = []
-    f31b = []
-    s31a = []
-    s31b = []
+    f31a = SAF{T}[]
+    f31b = SAF{T}[]
+    s31a = GT{T}[]
+    s31b = LT{T}[]
     # 32
-    f32a = []
-    f32b = []
-    s32a = []
-    s32b = []
+    f32a = SAF{T}[]
+    f32b = SAF{T}[]
+    s32a = GT{T}[]
+    s32b = LT{T}[]
     for (xa,xb) in QT
         if xb in DS
             xi = xa
@@ -1042,21 +1164,21 @@ function MOI.optimize!(model::Optimizer)
         push!(f32b, MOI.ScalarAffineFunction(terms_32b, zero(T)))
         push!(s32b, MOI.LessThan{T}(zero(T)))
     end
-    c31a = MOI.add_constraints(model.optimizer, f31a, s31a)
-    c31b = MOI.add_constraints(model.optimizer, f31b, s31b)
-    c32a = MOI.add_constraints(model.optimizer, f32a, s32a)
-    c32b = MOI.add_constraints(model.optimizer, f32b, s32b)
+    c31a = add_and_cache_constraints(ch, model.optimizer, f31a, s31a)
+    c31b = add_and_cache_constraints(ch, model.optimizer, f31b, s31b)
+    c32a = add_and_cache_constraints(ch, model.optimizer, f32a, s32a)
+    c32b = add_and_cache_constraints(ch, model.optimizer, f32b, s32b)
 
     # eq 33 - Disjunction
-    f33a = []
-    f33b = []
-    s33a = []
-    s33b = []
+    f33a = SAF{T}[]
+    f33b = SAF{T}[]
+    s33a = GT{T}[]
+    s33b = LT{T}[]
     # 34
-    f34a = []
-    f34b = []
-    s34a = []
-    s34b = []
+    f34a = SAF{T}[]
+    f34b = SAF{T}[]
+    s34a = GT{T}[]
+    s34b = LT{T}[]
     for (xa,xb) in QT
         if xb in DS
             xi = xa
@@ -1101,25 +1223,33 @@ function MOI.optimize!(model::Optimizer)
             push!(s34b, MOI.LessThan{T}(Xu_i))
         end
     end
-    c33a = MOI.add_constraints(model.optimizer, f33a, s33a)
-    c33b = MOI.add_constraints(model.optimizer, f33b, s33b)
-    c34a = MOI.add_constraints(model.optimizer, f34a, s34a)
-    c34b = MOI.add_constraints(model.optimizer, f34b, s34b)
+    c33a = add_and_cache_constraints(ch, model.optimizer, f33a, s33a)
+    c33b = add_and_cache_constraints(ch, model.optimizer, f33b, s33b)
+    c34a = add_and_cache_constraints(ch, model.optimizer, f34a, s34a)
+    c34b = add_and_cache_constraints(ch, model.optimizer, f34b, s34b)
 
     # 37 - z is binary
-    f37 = []
-    s37 = []
+    f37 = SV[]
+    s37 = MOI.ZeroOne[]
     for zj in values(z), zjl in zj
         push!(f37, MOI.SingleVariable(zjl))
         push!(s37, MOI.ZeroOne())
     end
-    c37 = MOI.add_constraints(model.optimizer, f37, s37)
+    c37 = add_and_cache_constraints(ch, model.optimizer, f37, s37)
+
+    unset_quad_change(model)
 
     # TODO: deal with integers
     # TODO: use model to hold intercepted ctrs?
-    return MOI.optimize!(model.optimizer)
+    return 
 end
 
+function MOI.optimize!(model::Optimizer)
+    if model.has_quad_change || model.index_cache === nothing
+        build_approximation!(model)
+    end
+    return MOI.optimize!(model.optimizer)
+end
 
 function MOI.get(model::Optimizer, attr::MOI.VariablePrimal, vi::VI)
     return MOI.get(model.optimizer, attr, vi)
@@ -1288,7 +1418,7 @@ function get_affine_part(f::MOI.VectorQuadraticFunction{T}) where T
     return MOI.VectorAffineFunction{T}(f.affine_terms, f.constants)
 end
 function convert_to_affine(model::Optimizer, f::QuadraticFunction{T}) where T
-    fc = MOIU.canonical(f)
+    fc = copy(f)
     for t in fc.quadratic_terms
         aff_term = build_affine_term(model, t)
         push!(fc.affine_terms, aff_term)

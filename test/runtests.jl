@@ -11,7 +11,8 @@ include("solvers/cbc.jl")
 
 include("moi.jl")
 
-const CONFIG_LOW_TOL = MOIT.TestConfig(atol = 1e-3, rtol = 1e-3)
+const CONFIG_LOW_TOL = MOIT.TestConfig(atol = 1e-3, rtol = 1e-2, duals = false, infeas_certificates = false)
+const CONFIG_VERY_LOW_TOL = MOIT.TestConfig(atol = 5e-3, rtol = 5e-2, duals = false, infeas_certificates = false)
 const CONFIG = MOIT.TestConfig(duals = false, infeas_certificates = false)
 
 @testset "From MOI ncqcp" begin
@@ -19,6 +20,17 @@ const CONFIG = MOIT.TestConfig(duals = false, infeas_certificates = false)
         MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
         ncqcp1test_mod(MODEL, CONFIG_LOW_TOL)
         ncqcp2test_mod(MODEL, CONFIG_LOW_TOL)
+    end
+end
+
+@testset "From MOI qp" begin
+    for opt in optimizers
+        MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
+        MOI.set(MODEL, QuadraticToBinary.GlobalVariablePrecision(), 1e-5)
+        qp1test_mod(MODEL, CONFIG_LOW_TOL)
+        MOI.set(MODEL, QuadraticToBinary.GlobalVariablePrecision(), 1e-4)
+        qp2test_mod(MODEL, CONFIG_VERY_LOW_TOL)
+        qp3test_mod(MODEL, CONFIG_LOW_TOL)
     end
 end
 
