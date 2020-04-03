@@ -98,6 +98,8 @@ end
         MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
         MOIT.intlineartest(MODEL, CONFIG, [
             "indicator1", "indicator2", "indicator3", "indicator4"
+            # TODO reenable when https://github.com/JuliaOpt/MathOptInterface.jl/issues/897 is resolved
+            "semiconttest", "semiinttest"
         ])
     end
 end
