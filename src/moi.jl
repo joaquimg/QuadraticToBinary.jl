@@ -10,43 +10,6 @@ const EQ{T} = MOI.EqualTo{T}
 const LT{T} = MOI.LessThan{T}
 const GT{T} = MOI.GreaterThan{T}
 
-# same as MOI except for quad stuff
-MOIU.@model(NonQuadraticModel,
-       (MOI.ZeroOne, MOI.Integer),
-       (MOI.EqualTo, MOI.GreaterThan, MOI.LessThan, MOI.Interval,
-        MOI.Semicontinuous, MOI.Semiinteger),
-       (MOI.Reals, MOI.Zeros, MOI.Nonnegatives, MOI.Nonpositives,
-        MOI.Complements, MOI.NormInfinityCone, MOI.NormOneCone,
-        MOI.SecondOrderCone, MOI.RotatedSecondOrderCone,
-        MOI.GeometricMeanCone, MOI.ExponentialCone, MOI.DualExponentialCone,
-        MOI.RelativeEntropyCone, MOI.NormSpectralCone, MOI.NormNuclearCone,
-        MOI.PositiveSemidefiniteConeTriangle, MOI.PositiveSemidefiniteConeSquare,
-        MOI.RootDetConeTriangle, MOI.RootDetConeSquare, MOI.LogDetConeTriangle,
-        MOI.LogDetConeSquare),
-       (MOI.PowerCone, MOI.DualPowerCone, MOI.SOS1, MOI.SOS2),
-       (),
-       (MOI.ScalarAffineFunction,),
-       (MOI.VectorOfVariables,),
-       (MOI.VectorAffineFunction,))
-
-MOIU.@model(PureQuadraticModel,
-       (MOI.ZeroOne, MOI.Integer),
-       (MOI.EqualTo, MOI.GreaterThan, MOI.LessThan, MOI.Interval,
-        MOI.Semicontinuous, MOI.Semiinteger),
-       (MOI.Reals, MOI.Zeros, MOI.Nonnegatives, MOI.Nonpositives,
-        MOI.Complements, MOI.NormInfinityCone, MOI.NormOneCone,
-        MOI.SecondOrderCone, MOI.RotatedSecondOrderCone,
-        MOI.GeometricMeanCone, MOI.ExponentialCone, MOI.DualExponentialCone,
-        MOI.RelativeEntropyCone, MOI.NormSpectralCone, MOI.NormNuclearCone,
-        MOI.PositiveSemidefiniteConeTriangle, MOI.PositiveSemidefiniteConeSquare,
-        MOI.RootDetConeTriangle, MOI.RootDetConeSquare, MOI.LogDetConeTriangle,
-        MOI.LogDetConeSquare),
-       (MOI.PowerCone, MOI.DualPowerCone, MOI.SOS1, MOI.SOS2,),
-       (),
-       (MOI.ScalarQuadraticFunction,),
-       (),
-       (MOI.VectorQuadraticFunction,))
-
 const SCALAR_SETS = Union{
     MOI.GreaterThan{Float64},
     MOI.LessThan{Float64},
@@ -522,16 +485,38 @@ function MOI.set(model::Optimizer, attr::MOI.ConstraintFunction,
     error("Operation not allowed. Quadratic functions cant be modified.")
 end
 
+function MOI.add_constrained_variable(model::Optimizer, s::S
+) where {S<:MOI.AbstractScalarSet}
+    v, c = MOI.add_constrained_variable(model.optimizer, s)
+    model.original_variables[v] = VariableInfo()
+    return v, c
+end
+function MOI.add_constrained_variables(model::Optimizer, s::Vector{S}
+) where {S<:MOI.AbstractScalarSet}
+    vs, cs = MOI.add_constrained_variables(model.optimizer, s)
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    return vs, cs
+end
+function MOI.add_constrained_variables(model::Optimizer, s::S
+) where {S<:MOI.AbstractVectorSet}
+    vs, cs = MOI.add_constrained_variables(model.optimizer, s)
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    return vs, cs
+end
+
 function MOI.add_constraint(model::Optimizer, f::F, s::S
 ) where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
-    ci = MOI.add_constraint(model.optimizer, f, s)
-    return ci
+    return MOI.add_constraint(model.optimizer, f, s)
 end
 function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
 ) where {F, S}
-    cis = MOI.add_constraints(model.optimizer, f, s)
-    return cis
+    return MOI.add_constraints(model.optimizer, f, s)
 end
+
 function MOI.add_constraint(model::Optimizer, f::F, s::S
 ) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
     fc = MOIU.canonical(f)
@@ -718,6 +703,35 @@ function cache_bounds(
     return
 end
 
+function MOI.add_constrained_variables(
+    model::Optimizer, s::Vector{S}
+) where {S <: SCALAR_SETS}
+    vs, c = MOI.add_constrained_variables(model.optimizer, s)
+    # from add var
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    # from add con
+    f = MOI.SingleVariable.(vs)
+    for i in eachindex(f)
+        cache_bounds(model, f[i], s[i])
+        model.ci_to_var[c[i]] = f[i].variable
+    end
+    return vs, c
+end
+function MOI.add_constrained_variable(
+    model::Optimizer, s::S
+) where {S <: SCALAR_SETS}
+    v, ci = MOI.add_constrained_variable(model.optimizer, s)
+    # from add var
+    model.original_variables[v] = VariableInfo()
+    # from add con
+    f = MOI.SingleVariable(v)
+    cache_bounds(model, f, s)
+    model.ci_to_var[ci] = f.variable
+    return v, ci
+end
+
 function MOI.add_constraints(
     model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
 ) where {S <: SCALAR_SETS}
@@ -822,6 +836,40 @@ end
 
 scalar_type(S::Type{MOI.ZeroOne}) = BINARY
 scalar_type(S::Type{MOI.Integer}) = INTEGER
+
+function MOI.add_constrained_variables(
+    model::Optimizer, s::Vector{S}
+) where {S <: SCALAR_TYPES}
+    vs, c = MOI.add_constrained_variables(model.optimizer, s)
+    # from add var
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    # from add con
+    f = MOI.SingleVariable.(vs)
+    for i in eachindex(f)
+        info = model.original_variables[f[i].variable]
+        info.type = scalar_type(S)
+    end
+    for i in eachindex(c)
+        model.ci_to_var[c[i]] = f[i].variable
+    end
+    return vs, c
+end
+function MOI.add_constrained_variable(
+    model::Optimizer, s::S
+) where {S <: SCALAR_TYPES}
+    v, ci = MOI.add_constrained_variable(model.optimizer, s)
+    # from add var
+    model.original_variables[v] = VariableInfo()
+    # from add con
+    f = MOI.SingleVariable(v)
+    info = model.original_variables[f.variable]
+    info.type = scalar_type(S)
+    model.ci_to_var[ci] = f.variable
+    return v, ci
+end
+
 function MOI.add_constraints(
     model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
 ) where {S <: SCALAR_TYPES}
