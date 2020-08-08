@@ -127,11 +127,15 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
 
     has_quad_change::Bool
 
-    function Optimizer{T}(optimizer::OT) where {T, OT <: MOI.ModelLike}
+    fallback_lb::Float64
+    fallback_ub::Float64
+
+    function Optimizer{T}(optimizer::OT; lb = -Inf, ub = +Inf, global_precision = 1e-4
+        ) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
         return new{T, OT}(
             optimizer,
-            1e-4,
+            global_precision,
             nothing,
             Dict{CI, MOI.ScalarQuadraticFunction{T}}(),
             Dict{CI, MOI.VectorQuadraticFunction{T}}(),
@@ -139,7 +143,9 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
             Dict{CI, VI}(),
             Dict{Tuple{VI,VI}, VI}(),
             nothing,
-            false
+            false,
+            lb,
+            ub,
             )
     end
 end
@@ -977,9 +983,22 @@ function delete_additional_constraints(model)
     end
 end
 
-
-lower(info) = info.type == BINARY ? zero(typeof(info.lower)) : info.lower
-upper(info) = info.type == BINARY ? one(typeof(info.lower)) : info.upper
+function lower(model, info)
+    if info.type == BINARY 
+        return zero(typeof(info.lower))
+    elseif info.lower > -Inf
+        return info.lower
+    end
+    return model.fallback_lb
+end
+function upper(model, info)
+    if info.type == BINARY
+        return one(typeof(info.lower))
+    elseif info.upper < Inf
+        return info.upper
+    end
+    return model.fallback_ub
+end
 function get_precision(model::Optimizer{T}, x) where T
     info = model.original_variables[x]
     a = model.global_initial_precision
@@ -1054,10 +1073,10 @@ function build_approximation!(model::Optimizer)
     for pair in QT
         for x in pair
             info = model.original_variables[x]
-            if !(upper(info) < Inf)
+            if !(upper(model, info) < Inf)
                 error("Variable $x has no upper bound.")
             end
-            if !(lower(info) > -Inf)
+            if !(lower(model, info) > -Inf)
                 error("Variable $x has no lower bound.")
             end
         end
@@ -1102,8 +1121,8 @@ function build_approximation!(model::Optimizer)
     s28 = EQ{T}[]
     for xj in DS
         info = model.original_variables[xj]
-        Xu = upper(info)
-        Xl = lower(info)
+        Xu = upper(model, info)
+        Xl = lower(model, info)
         Δxj = Δx[xj]
         zj = z[xj]
         terms = [
@@ -1129,8 +1148,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info = model.original_variables[xj]
-        Xu = upper(info)
-        Xl = lower(info)
+        Xu = upper(model, info)
+        Xl = lower(model, info)
         #order is important in the pairs
         Δwij = Δw[(xa,xb)]
         wij = w[(xa,xb)]
@@ -1180,8 +1199,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info_i = model.original_variables[xi]
-        Xu_i = upper(info_i)
-        Xl_i = lower(info_i)
+        Xu_i = upper(model, info_i)
+        Xl_i = lower(model, info_i)
         Δwij = Δw[(xa,xb)]
         Δxj = Δx[xj]
         p = get_precision(model, xj)
@@ -1238,8 +1257,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info_i = model.original_variables[xi]
-        Xu_i = upper(info_i)
-        Xl_i = lower(info_i)
+        Xu_i = upper(model, info_i)
+        Xl_i = lower(model, info_i)
         zj = z[xj]
         xhij = xh[(xa,xb)]
         # 33
@@ -1410,6 +1429,8 @@ end
 
 struct VariablePrecision end
 struct GlobalVariablePrecision end
+struct FallbackUpperBound end
+struct FallbackLowerBound end
 
 function MOI.set(
     model::Optimizer,
@@ -1430,7 +1451,7 @@ end
 
 function MOI.set(
     model::Optimizer,
-    attr::GlobalVariablePrecision,
+    ::GlobalVariablePrecision,
     value::Union{Nothing, Float64}
 )
     val = value === nothing ? NaN : value
@@ -1439,18 +1460,41 @@ function MOI.set(
     return
 end
 function MOI.get(
-    model::Optimizer, attr::GlobalVariablePrecision, x::MOI.VariableIndex
+    model::Optimizer, ::GlobalVariablePrecision, x::MOI.VariableIndex
 )
     return model.global_initial_precision
 end
 
-function MOI.get(model::Optimizer, attr::MOI.NumberOfConstraints{F, S}) where {F, S}
+function MOI.set(model::Optimizer, ::FallbackLowerBound, val)
+    model.fallback_lb = val
+    return nothing
+end
+function MOI.set(model::Optimizer, ::FallbackLowerBound, ::Nothing)
+    model.fallback_lb = -Inf
+    return nothing
+end
+function MOI.get(model::Optimizer, ::FallbackLowerBound)
+    return model.fallback_lb
+end
+function MOI.set(model::Optimizer, ::FallbackUpperBound, val)
+    model.fallback_ub = val
+    return nothing
+end
+function MOI.set(model::Optimizer, ::FallbackUpperBound, ::Nothing)
+    model.fallback_ub = Inf
+    return nothing
+end
+function MOI.get(model::Optimizer, ::FallbackUpperBound)
+    return model.fallback_ub
+end
+
+function MOI.get(model::Optimizer, ::MOI.NumberOfConstraints{F, S}) where {F, S}
     # TODO: this could be more efficient.
     return length(MOI.get(model, MOI.ListOfConstraintIndices{F,S}()))
 end
 
 
-function MOI.get(model::Optimizer, ::MOI.ListOfConstraints)
+function MOI.get(::Optimizer, ::MOI.ListOfConstraints)
     constraints = Set{Tuple{DataType, DataType}}()
     error("TODO")
 end
