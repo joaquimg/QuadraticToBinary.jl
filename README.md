@@ -150,6 +150,12 @@ MOI.set(model, QuadraticToBinary.VariablePrecision(), vi, val)
 The precision for each varible will be `val * (UB - LB)`. Where `UB` and `LB` are,
 respectively, the upper and lower bound of the variable.
 
+For the sake of simplicity, the following two attributes are made available:
+`QuadraticToBinary.FallbackUpperBound` and `QuadraticToBinary.FallbackLowerBound`.
+As usual, these can be get and set with the `MOI.get` and `MOI.set` methods.
+These allow setting bounds used in variables that have no explicit upper bounds
+and need to be expanded.
+
 
 ## Reference
 
