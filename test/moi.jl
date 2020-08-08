@@ -59,6 +59,74 @@ function ncqcp1test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
     end
 end
 
+function ncqcp1test_mod2(model::MOI.ModelLike, config::MOIT.TestConfig)
+    atol = config.atol
+    rtol = config.rtol
+    # Max 2x + y
+    # s.t. x * y <= 4 (c)
+    #      x, y >= 1
+
+    # @test MOIU.supports_default_copy_to(model, #=copy_names=# false)
+    @test MOI.supports(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}())
+    @test MOI.supports_constraint(model, MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64})
+
+    MOI.empty!(model)
+    @test MOI.is_empty(model)
+
+    x = MOI.add_variable(model)
+    y = MOI.add_variable(model)
+    @test MOI.get(model, MOI.NumberOfVariables()) == 2
+
+    # set upper fallback
+    MOI.set(model, QuadraticToBinary.FallbackUpperBound(), 10.0)
+    @test MOI.get(model, QuadraticToBinary.FallbackUpperBound()) == 10.0
+
+    # set and unset lower fallback
+    MOI.set(model, QuadraticToBinary.FallbackLowerBound(), 0.0)
+    @test MOI.get(model, QuadraticToBinary.FallbackLowerBound()) == 0.0
+    MOI.set(model, QuadraticToBinary.FallbackLowerBound(), nothing)
+    @test MOI.get(model, QuadraticToBinary.FallbackLowerBound()) == -Inf
+
+    vc1 = MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
+    @test vc1.value == x.value
+    vc2 = MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
+    @test vc2.value == y.value
+
+    cf = MOI.ScalarQuadraticFunction(
+        [MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
+    c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
+    @test MOI.get(model, MOI.NumberOfConstraints{
+        MOI.ScalarQuadraticFunction{Float64}, MOI.LessThan{Float64}}()) == 1
+
+    MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
+        MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MAX_SENSE
+
+    if config.query
+        @test cf ≈ MOI.get(model, MOI.ConstraintFunction(), c)
+    end
+
+    if config.solve
+        @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
+
+        MOI.optimize!(model)
+
+        @test MOI.get(model, MOI.TerminationStatus()) == config.optimal_status
+
+        @test MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @test MOI.get(model, MOI.ObjectiveValue()) ≈ 9.0 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.VariablePrimal(), x) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.VariablePrimal(), y) ≈ 1.0 atol=atol rtol=rtol
+
+        @test MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc1) ≈ 4.0 atol=atol rtol=rtol
+        @test MOI.get(model, MOI.ConstraintPrimal(), vc2) ≈ 1.0 atol=atol rtol=rtol
+    end
+end
+
 function ncqcp2test_mod(model::MOI.ModelLike, config::MOIT.TestConfig)
     atol = config.atol
     rtol = config.rtol
