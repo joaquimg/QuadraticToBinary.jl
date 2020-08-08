@@ -19,6 +19,7 @@ const CONFIG = MOIT.TestConfig(duals = false, infeas_certificates = false)
     for opt in optimizers
         MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
         ncqcp1test_mod(MODEL, CONFIG_LOW_TOL)
+        ncqcp1test_mod2(MODEL, CONFIG_LOW_TOL)
         ncqcp2test_mod(MODEL, CONFIG_LOW_TOL)
     end
 end

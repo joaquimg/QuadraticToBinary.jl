@@ -10,43 +10,6 @@ const EQ{T} = MOI.EqualTo{T}
 const LT{T} = MOI.LessThan{T}
 const GT{T} = MOI.GreaterThan{T}
 
-# same as MOI except for quad stuff
-MOIU.@model(NonQuadraticModel,
-       (MOI.ZeroOne, MOI.Integer),
-       (MOI.EqualTo, MOI.GreaterThan, MOI.LessThan, MOI.Interval,
-        MOI.Semicontinuous, MOI.Semiinteger),
-       (MOI.Reals, MOI.Zeros, MOI.Nonnegatives, MOI.Nonpositives,
-        MOI.Complements, MOI.NormInfinityCone, MOI.NormOneCone,
-        MOI.SecondOrderCone, MOI.RotatedSecondOrderCone,
-        MOI.GeometricMeanCone, MOI.ExponentialCone, MOI.DualExponentialCone,
-        MOI.RelativeEntropyCone, MOI.NormSpectralCone, MOI.NormNuclearCone,
-        MOI.PositiveSemidefiniteConeTriangle, MOI.PositiveSemidefiniteConeSquare,
-        MOI.RootDetConeTriangle, MOI.RootDetConeSquare, MOI.LogDetConeTriangle,
-        MOI.LogDetConeSquare),
-       (MOI.PowerCone, MOI.DualPowerCone, MOI.SOS1, MOI.SOS2),
-       (),
-       (MOI.ScalarAffineFunction,),
-       (MOI.VectorOfVariables,),
-       (MOI.VectorAffineFunction,))
-
-MOIU.@model(PureQuadraticModel,
-       (MOI.ZeroOne, MOI.Integer),
-       (MOI.EqualTo, MOI.GreaterThan, MOI.LessThan, MOI.Interval,
-        MOI.Semicontinuous, MOI.Semiinteger),
-       (MOI.Reals, MOI.Zeros, MOI.Nonnegatives, MOI.Nonpositives,
-        MOI.Complements, MOI.NormInfinityCone, MOI.NormOneCone,
-        MOI.SecondOrderCone, MOI.RotatedSecondOrderCone,
-        MOI.GeometricMeanCone, MOI.ExponentialCone, MOI.DualExponentialCone,
-        MOI.RelativeEntropyCone, MOI.NormSpectralCone, MOI.NormNuclearCone,
-        MOI.PositiveSemidefiniteConeTriangle, MOI.PositiveSemidefiniteConeSquare,
-        MOI.RootDetConeTriangle, MOI.RootDetConeSquare, MOI.LogDetConeTriangle,
-        MOI.LogDetConeSquare),
-       (MOI.PowerCone, MOI.DualPowerCone, MOI.SOS1, MOI.SOS2,),
-       (),
-       (MOI.ScalarQuadraticFunction,),
-       (),
-       (MOI.VectorQuadraticFunction,))
-
 const SCALAR_SETS = Union{
     MOI.GreaterThan{Float64},
     MOI.LessThan{Float64},
@@ -164,11 +127,15 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
 
     has_quad_change::Bool
 
-    function Optimizer{T}(optimizer::OT) where {T, OT <: MOI.ModelLike}
+    fallback_lb::Float64
+    fallback_ub::Float64
+
+    function Optimizer{T}(optimizer::OT; lb = -Inf, ub = +Inf, global_precision = 1e-4
+        ) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
         return new{T, OT}(
             optimizer,
-            1e-4,
+            global_precision,
             nothing,
             Dict{CI, MOI.ScalarQuadraticFunction{T}}(),
             Dict{CI, MOI.VectorQuadraticFunction{T}}(),
@@ -176,7 +143,9 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
             Dict{CI, VI}(),
             Dict{Tuple{VI,VI}, VI}(),
             nothing,
-            false
+            false,
+            lb,
+            ub,
             )
     end
 end
@@ -522,16 +491,38 @@ function MOI.set(model::Optimizer, attr::MOI.ConstraintFunction,
     error("Operation not allowed. Quadratic functions cant be modified.")
 end
 
+function MOI.add_constrained_variable(model::Optimizer, s::S
+) where {S<:MOI.AbstractScalarSet}
+    v, c = MOI.add_constrained_variable(model.optimizer, s)
+    model.original_variables[v] = VariableInfo()
+    return v, c
+end
+function MOI.add_constrained_variables(model::Optimizer, s::Vector{S}
+) where {S<:MOI.AbstractScalarSet}
+    vs, cs = MOI.add_constrained_variables(model.optimizer, s)
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    return vs, cs
+end
+function MOI.add_constrained_variables(model::Optimizer, s::S
+) where {S<:MOI.AbstractVectorSet}
+    vs, cs = MOI.add_constrained_variables(model.optimizer, s)
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    return vs, cs
+end
+
 function MOI.add_constraint(model::Optimizer, f::F, s::S
 ) where {F<:MOI.AbstractFunction, S<:MOI.AbstractSet}
-    ci = MOI.add_constraint(model.optimizer, f, s)
-    return ci
+    return MOI.add_constraint(model.optimizer, f, s)
 end
 function MOI.add_constraints(model::Optimizer, f::Vector{F}, s::Vector{S}
 ) where {F, S}
-    cis = MOI.add_constraints(model.optimizer, f, s)
-    return cis
+    return MOI.add_constraints(model.optimizer, f, s)
 end
+
 function MOI.add_constraint(model::Optimizer, f::F, s::S
 ) where {F<:QuadraticFunction{T}, S<:MOI.AbstractSet} where T
     fc = MOIU.canonical(f)
@@ -718,6 +709,35 @@ function cache_bounds(
     return
 end
 
+function MOI.add_constrained_variables(
+    model::Optimizer, s::Vector{S}
+) where {S <: SCALAR_SETS}
+    vs, c = MOI.add_constrained_variables(model.optimizer, s)
+    # from add var
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    # from add con
+    f = MOI.SingleVariable.(vs)
+    for i in eachindex(f)
+        cache_bounds(model, f[i], s[i])
+        model.ci_to_var[c[i]] = f[i].variable
+    end
+    return vs, c
+end
+function MOI.add_constrained_variable(
+    model::Optimizer, s::S
+) where {S <: SCALAR_SETS}
+    v, ci = MOI.add_constrained_variable(model.optimizer, s)
+    # from add var
+    model.original_variables[v] = VariableInfo()
+    # from add con
+    f = MOI.SingleVariable(v)
+    cache_bounds(model, f, s)
+    model.ci_to_var[ci] = f.variable
+    return v, ci
+end
+
 function MOI.add_constraints(
     model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
 ) where {S <: SCALAR_SETS}
@@ -822,6 +842,40 @@ end
 
 scalar_type(S::Type{MOI.ZeroOne}) = BINARY
 scalar_type(S::Type{MOI.Integer}) = INTEGER
+
+function MOI.add_constrained_variables(
+    model::Optimizer, s::Vector{S}
+) where {S <: SCALAR_TYPES}
+    vs, c = MOI.add_constrained_variables(model.optimizer, s)
+    # from add var
+    for v in vs
+        model.original_variables[v] = VariableInfo()
+    end
+    # from add con
+    f = MOI.SingleVariable.(vs)
+    for i in eachindex(f)
+        info = model.original_variables[f[i].variable]
+        info.type = scalar_type(S)
+    end
+    for i in eachindex(c)
+        model.ci_to_var[c[i]] = f[i].variable
+    end
+    return vs, c
+end
+function MOI.add_constrained_variable(
+    model::Optimizer, s::S
+) where {S <: SCALAR_TYPES}
+    v, ci = MOI.add_constrained_variable(model.optimizer, s)
+    # from add var
+    model.original_variables[v] = VariableInfo()
+    # from add con
+    f = MOI.SingleVariable(v)
+    info = model.original_variables[f.variable]
+    info.type = scalar_type(S)
+    model.ci_to_var[ci] = f.variable
+    return v, ci
+end
+
 function MOI.add_constraints(
     model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
 ) where {S <: SCALAR_TYPES}
@@ -929,9 +983,22 @@ function delete_additional_constraints(model)
     end
 end
 
-
-lower(info) = info.type == BINARY ? zero(typeof(info.lower)) : info.lower
-upper(info) = info.type == BINARY ? one(typeof(info.lower)) : info.upper
+function lower(model, info)
+    if info.type == BINARY 
+        return zero(typeof(info.lower))
+    elseif info.lower > -Inf
+        return info.lower
+    end
+    return model.fallback_lb
+end
+function upper(model, info)
+    if info.type == BINARY
+        return one(typeof(info.lower))
+    elseif info.upper < Inf
+        return info.upper
+    end
+    return model.fallback_ub
+end
 function get_precision(model::Optimizer{T}, x) where T
     info = model.original_variables[x]
     a = model.global_initial_precision
@@ -1006,10 +1073,10 @@ function build_approximation!(model::Optimizer)
     for pair in QT
         for x in pair
             info = model.original_variables[x]
-            if !(upper(info) < Inf)
+            if !(upper(model, info) < Inf)
                 error("Variable $x has no upper bound.")
             end
-            if !(lower(info) > -Inf)
+            if !(lower(model, info) > -Inf)
                 error("Variable $x has no lower bound.")
             end
         end
@@ -1054,8 +1121,8 @@ function build_approximation!(model::Optimizer)
     s28 = EQ{T}[]
     for xj in DS
         info = model.original_variables[xj]
-        Xu = upper(info)
-        Xl = lower(info)
+        Xu = upper(model, info)
+        Xl = lower(model, info)
         Δxj = Δx[xj]
         zj = z[xj]
         terms = [
@@ -1081,8 +1148,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info = model.original_variables[xj]
-        Xu = upper(info)
-        Xl = lower(info)
+        Xu = upper(model, info)
+        Xl = lower(model, info)
         #order is important in the pairs
         Δwij = Δw[(xa,xb)]
         wij = w[(xa,xb)]
@@ -1132,8 +1199,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info_i = model.original_variables[xi]
-        Xu_i = upper(info_i)
-        Xl_i = lower(info_i)
+        Xu_i = upper(model, info_i)
+        Xl_i = lower(model, info_i)
         Δwij = Δw[(xa,xb)]
         Δxj = Δx[xj]
         p = get_precision(model, xj)
@@ -1190,8 +1257,8 @@ function build_approximation!(model::Optimizer)
             xj = xa
         end
         info_i = model.original_variables[xi]
-        Xu_i = upper(info_i)
-        Xl_i = lower(info_i)
+        Xu_i = upper(model, info_i)
+        Xl_i = lower(model, info_i)
         zj = z[xj]
         xhij = xh[(xa,xb)]
         # 33
@@ -1362,6 +1429,8 @@ end
 
 struct VariablePrecision end
 struct GlobalVariablePrecision end
+struct FallbackUpperBound end
+struct FallbackLowerBound end
 
 function MOI.set(
     model::Optimizer,
@@ -1382,7 +1451,7 @@ end
 
 function MOI.set(
     model::Optimizer,
-    attr::GlobalVariablePrecision,
+    ::GlobalVariablePrecision,
     value::Union{Nothing, Float64}
 )
     val = value === nothing ? NaN : value
@@ -1391,18 +1460,41 @@ function MOI.set(
     return
 end
 function MOI.get(
-    model::Optimizer, attr::GlobalVariablePrecision, x::MOI.VariableIndex
+    model::Optimizer, ::GlobalVariablePrecision, x::MOI.VariableIndex
 )
     return model.global_initial_precision
 end
 
-function MOI.get(model::Optimizer, attr::MOI.NumberOfConstraints{F, S}) where {F, S}
+function MOI.set(model::Optimizer, ::FallbackLowerBound, val)
+    model.fallback_lb = val
+    return nothing
+end
+function MOI.set(model::Optimizer, ::FallbackLowerBound, ::Nothing)
+    model.fallback_lb = -Inf
+    return nothing
+end
+function MOI.get(model::Optimizer, ::FallbackLowerBound)
+    return model.fallback_lb
+end
+function MOI.set(model::Optimizer, ::FallbackUpperBound, val)
+    model.fallback_ub = val
+    return nothing
+end
+function MOI.set(model::Optimizer, ::FallbackUpperBound, ::Nothing)
+    model.fallback_ub = Inf
+    return nothing
+end
+function MOI.get(model::Optimizer, ::FallbackUpperBound)
+    return model.fallback_ub
+end
+
+function MOI.get(model::Optimizer, ::MOI.NumberOfConstraints{F, S}) where {F, S}
     # TODO: this could be more efficient.
     return length(MOI.get(model, MOI.ListOfConstraintIndices{F,S}()))
 end
 
 
-function MOI.get(model::Optimizer, ::MOI.ListOfConstraints)
+function MOI.get(::Optimizer, ::MOI.ListOfConstraints)
     constraints = Set{Tuple{DataType, DataType}}()
     error("TODO")
 end

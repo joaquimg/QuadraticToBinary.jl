@@ -9,7 +9,7 @@ MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 
 [compat]
-MathOptInterface = "~0.9.12"
+MathOptInterface = "0.9.12"
 DataStructures = "0.17.10"
 julia = "1"
 
