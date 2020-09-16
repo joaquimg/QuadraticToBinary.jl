@@ -1,7 +1,7 @@
 name = "QuadraticToBinary"
 uuid = "014a38d5-7acb-4e20-b6c0-4fe5c2344fd1"
 authors = ["Joaquim Garcia <joaquimgarcia@psr-inc.com>"]
-version = "0.1.0"
+version = "0.2.0"
 
 
 [deps]
