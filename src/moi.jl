@@ -306,6 +306,10 @@ function MOI.supports_add_constrained_variables(
     model::Optimizer, ::Type{S}) where S
     return MOI.supports_add_constrained_variables(model.optimizer, S)
 end
+function MOI.supports_add_constrained_variables(
+    model::Optimizer, ::Type{MOI.Reals})
+    return MOI.supports_add_constrained_variables(model.optimizer, MOI.Reals)
+end
 
 # function MOI.set(model::Optimizer, param::MOI.RawParameter, value)
 #     # if in a subset of the q2b save it
