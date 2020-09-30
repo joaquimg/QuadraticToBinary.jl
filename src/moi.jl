@@ -130,6 +130,8 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
     fallback_lb::Float64
     fallback_ub::Float64
 
+    allow_soc::Bool
+
     function Optimizer{T}(optimizer::OT; lb = -Inf, ub = +Inf, global_precision = 1e-4
         ) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
@@ -146,6 +148,7 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
             false,
             lb,
             ub,
+            true,
             )
     end
 end
@@ -303,12 +306,32 @@ function MOI.get(model::Optimizer, ::MOI.SolverName)
 end
 
 function MOI.supports_add_constrained_variables(
-    model::Optimizer, ::Type{S}) where S
+    model::Optimizer, ::Type{S}) where {S<:MOI.AbstractVectorSet}
+    return MOI.supports_add_constrained_variables(model.optimizer, S)
+end
+function MOI.supports_add_constrained_variables(
+    model::Optimizer, ::Type{S}) where {S<:MOI.AbstractScalarSet}
     return MOI.supports_add_constrained_variables(model.optimizer, S)
 end
 function MOI.supports_add_constrained_variables(
     model::Optimizer, ::Type{MOI.Reals})
     return MOI.supports_add_constrained_variables(model.optimizer, MOI.Reals)
+end
+function MOI.supports_add_constrained_variables(
+    model::Optimizer, ::Type{S}) where {
+        S<:Union{MOI.SecondOrderCone, MOI.RotatedSecondOrderCone}
+    }
+    if model.allow_soc
+        return MOI.supports_add_constrained_variables(model.optimizer, S)
+    else
+        return false
+    end
+end
+function MOI.supports_add_constrained_variables(
+    model::Optimizer, ::Type{S}) where {
+        S<:Union{MOI.SOS1{T}, MOI.SOS2{T}}
+    } where T
+    return MOI.supports_add_constrained_variables(model.optimizer, S)
 end
 
 # function MOI.set(model::Optimizer, param::MOI.RawParameter, value)
