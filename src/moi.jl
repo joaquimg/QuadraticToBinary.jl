@@ -1454,10 +1454,10 @@ function MOI.get(
     return MOI.get(model.optimizer, attr, x)
 end
 
-struct VariablePrecision end
-struct GlobalVariablePrecision end
-struct FallbackUpperBound end
-struct FallbackLowerBound end
+struct VariablePrecision <: MOI.AbstractVariableAttribute end
+struct GlobalVariablePrecision <: MOI.AbstractOptimizerAttribute end
+struct FallbackUpperBound <: MOI.AbstractOptimizerAttribute  end
+struct FallbackLowerBound <: MOI.AbstractOptimizerAttribute  end
 
 function MOI.set(
     model::Optimizer,
@@ -1520,10 +1520,24 @@ function MOI.get(model::Optimizer, ::MOI.NumberOfConstraints{F, S}) where {F, S}
     return length(MOI.get(model, MOI.ListOfConstraintIndices{F,S}()))
 end
 
-
-function MOI.get(::Optimizer, ::MOI.ListOfConstraints)
+function MOI.get(model::Optimizer, ::MOI.ListOfConstraints)
     constraints = Set{Tuple{DataType, DataType}}()
-    error("TODO")
+    inner_ctrs = MOI.get(model.optimizer, MOI.ListOfConstraints())
+    for (F, S) in inner_ctrs
+        if F <: Union{MOI.ScalarAffineFunction, MOI.VectorQuadraticFunction}
+            if MOI.get(model, MOI.NumberOfConstraints{F, S}()) > 0
+                push!(constraints, (F,S))
+            end
+            if MOI.get(model, MOI.NumberOfConstraints{quadratic_type(F), S}()) > 0
+                push!(constraints, (quadratic_type(F),S))
+            end
+        else
+            push!(constraints, (F,S))
+        end
+    end
+    # error("TODO")
+    # deal with deleted parameters
+    collect(constraints)
 end
 
 function ordered_term_indices(t::MOI.ScalarQuadraticTerm)
