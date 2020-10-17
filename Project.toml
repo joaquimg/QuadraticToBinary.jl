@@ -1,8 +1,7 @@
 name = "QuadraticToBinary"
 uuid = "014a38d5-7acb-4e20-b6c0-4fe5c2344fd1"
 authors = ["Joaquim Garcia <joaquimgarcia@psr-inc.com>"]
-version = "0.2.2"
-
+version = "0.2.3"
 
 [deps]
 MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
