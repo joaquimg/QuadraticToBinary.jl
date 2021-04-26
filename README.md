@@ -6,8 +6,8 @@
 | [![Build Status][build-img]][build-url] [![Codecov branch][codecov-img]][codecov-url] |
 
 
-[build-img]: https://travis-ci.org/joaquimg/QuadraticToBinary.jl.svg?branch=master
-[build-url]: https://travis-ci.org/joaquimg/QuadraticToBinary.jl
+[build-img]: https://github.com/joaquimg/QuadraticToBinary.jl/workflows/CI/badge.svg?branch=master
+[build-url]: https://github.com/joaquimg/QuadraticToBinary.jl/actions?query=workflow%3ACI
 [codecov-img]: http://codecov.io/github/joaquimg/QuadraticToBinary.jl/coverage.svg?branch=master
 [codecov-url]: http://codecov.io/github/joaquimg/QuadraticToBinary.jl?branch=master
 
