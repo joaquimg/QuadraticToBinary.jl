@@ -52,17 +52,9 @@ using MathOptInterface
 using QuadraticToBinary
 using Cbc
 
-const MOI = MathOptInterface
-const MOIU = MOI.Utilities
-
-const optimizer = MOI.Bridges.full_bridge_optimizer(
-    MOIU.CachingOptimizer(
-        MOIU.UniversalFallback(MOIU.Model{Float64}()),
-        Cbc.Optimizer()), Float64)
-
 model = Model(
     ()->QuadraticToBinary.Optimizer{Float64}(
-        optimizer))
+        MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)))
 
 @variable(model, 1 <= x <= 10)
 @variable(model, 1 <= y <= 10)
@@ -91,13 +83,9 @@ objective_value(model) # ≈ 9.0
 using MathOptInterface
 using QuadraticToBinary
 const MOI = MathOptInterface
-const MOIU = MOI.Utilities
 using Cbc
 
-const optimizer = MOI.Bridges.full_bridge_optimizer(
-    MOIU.CachingOptimizer(
-        MOIU.UniversalFallback(MOIU.Model{Float64}()),
-        Cbc.Optimizer()), Float64)
+optimizer = MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)
 
 model = QuadraticToBinary.Optimizer{Float64}(optimizer)
 
