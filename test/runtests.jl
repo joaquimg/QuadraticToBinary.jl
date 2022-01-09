@@ -2,7 +2,7 @@ using QuadraticToBinary, Test, MathOptInterface
 
 const MOI = MathOptInterface
 const MOIU = MOI.Utilities
-const MOIT = MOI.Test
+const MOIT = MOI.DeprecatedTest
 const MOIB = MOI.Bridges
 
 optimizers = []
@@ -11,14 +11,52 @@ include("solvers/cbc.jl")
 
 include("moi.jl")
 
-const CONFIG_LOW_TOL = MOIT.TestConfig(atol = 1e-3, rtol = 1e-2, duals = false, infeas_certificates = false)
-const CONFIG_VERY_LOW_TOL = MOIT.TestConfig(atol = 5e-3, rtol = 5e-2, duals = false, infeas_certificates = false)
-const CONFIG = MOIT.TestConfig(duals = false, infeas_certificates = false)
+const CONFIG_LOW_TOL = MOIT.Config{Float64}(atol = 1e-3, rtol = 1e-2, duals = false, infeas_certificates = false)
+const CONFIG_VERY_LOW_TOL = MOIT.Config{Float64}(atol = 5e-3, rtol = 5e-2, duals = false, infeas_certificates = false)
+const CONFIG = MOIT.Config{Float64}(duals = false, infeas_certificates = false)
 
 @testset "basic_constraint_tests" begin
     for opt in optimizers
         MODEL = QuadraticToBinary.Optimizer{Float64}(opt)
         MOIT.basic_constraint_tests(MODEL, CONFIG)
+    end
+end
+
+@testset "readme" begin
+    for opt in optimizers
+
+        MOI.empty!(opt)
+        @test MOI.is_empty(opt)
+
+        model = QuadraticToBinary.Optimizer{Float64}(opt)
+
+        x = MOI.add_variable(model)
+        y = MOI.add_variable(model)
+
+        MOI.add_constraint(model, x, MOI.GreaterThan(1.0))
+        MOI.add_constraint(model, y, MOI.GreaterThan(1.0))
+
+        MOI.add_constraint(model, x, MOI.LessThan(10.0))
+        MOI.add_constraint(model, y, MOI.LessThan(10.0))
+
+        c = MOI.add_constraint(model, 1.0 * x * y, MOI.LessThan(4.0))
+
+        MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
+            2.0 * x + y)
+        MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
+
+        MOI.optimize!(model)
+
+        @assert MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMAL
+
+        @assert MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
+
+        @assert MOI.get(model, MOI.ObjectiveValue()) ≈ 9.0
+
+        @assert MOI.get(model, MOI.VariablePrimal(), x) ≈ 4.0
+        @assert MOI.get(model, MOI.VariablePrimal(), y) ≈ 1.0
+
+        @assert MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0
     end
 end
 
