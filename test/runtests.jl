@@ -109,7 +109,7 @@ function test_runtests()
     MOI.set(model, QuadraticToBinary.FallbackUpperBound(), 1.0)
     MOI.set(model, QuadraticToBinary.FallbackLowerBound(), 0.0)
     MOI.set(model, QuadraticToBinary.GlobalVariablePrecision(), 1e-5)
-    MOI.set(model, MOI.Silent(), false)
+    MOI.set(model, MOI.Silent(), true)
     MOI.set(model, MOI.TimeLimitSec(), 80.0)
     MOI.Test.runtests(
         model,
