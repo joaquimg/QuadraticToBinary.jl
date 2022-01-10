@@ -1,14 +1,14 @@
 name = "QuadraticToBinary"
 uuid = "014a38d5-7acb-4e20-b6c0-4fe5c2344fd1"
 authors = ["Joaquim Garcia <joaquimgarcia@psr-inc.com>"]
-version = "0.2.4"
+version = "0.3.0"
 
 [deps]
 MathOptInterface = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 
 [compat]
-MathOptInterface = "0.9.12"
+MathOptInterface = "0.10.6"
 DataStructures = "0.17.10, 0.18.0"
 julia = "1"
 

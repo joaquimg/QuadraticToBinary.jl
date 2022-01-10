@@ -4,7 +4,6 @@ const MOIU = MOI.Utilities
 const VI = MOI.VariableIndex
 const CI = MOI.ConstraintIndex
 
-const SV = MOI.SingleVariable
 const SAF{T} = MOI.ScalarAffineFunction{T}
 const EQ{T} = MOI.EqualTo{T}
 const LT{T} = MOI.LessThan{T}
@@ -61,7 +60,7 @@ mutable struct VariableInfo
 end
 
 # Supported Functions
-const SF = Union{MOI.SingleVariable, 
+const SF = Union{MOI.VariableIndex, 
                  MOI.ScalarAffineFunction{Float64}, 
                  MOI.VectorOfVariables, 
                  MOI.VectorAffineFunction{Float64}}
@@ -84,18 +83,18 @@ struct IndexDataCache{T}
     sa_eq::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.EqualTo{T}}}
     sa_lt::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.LessThan{T}}}
     sa_gt::Vector{CI{MOI.ScalarAffineFunction{T}, MOI.GreaterThan{T}}}
-    sv_lt::Vector{CI{MOI.SingleVariable, MOI.LessThan{T}}}
-    sv_gt::Vector{CI{MOI.SingleVariable, MOI.GreaterThan{T}}}
-    sv_zo::Vector{CI{MOI.SingleVariable, MOI.ZeroOne}}
+    sv_lt::Vector{CI{MOI.VariableIndex, MOI.LessThan{T}}}
+    sv_gt::Vector{CI{MOI.VariableIndex, MOI.GreaterThan{T}}}
+    sv_zo::Vector{CI{MOI.VariableIndex, MOI.ZeroOne}}
     function IndexDataCache{T}() where T
         new(
             VI[],
             CI{MOI.ScalarAffineFunction{T}, MOI.EqualTo{T}}[],
             CI{MOI.ScalarAffineFunction{T}, MOI.LessThan{T}}[],
             CI{MOI.ScalarAffineFunction{T}, MOI.GreaterThan{T}}[],
-            CI{MOI.SingleVariable, MOI.LessThan{T}}[],
-            CI{MOI.SingleVariable, MOI.GreaterThan{T}}[],
-            CI{MOI.SingleVariable, MOI.ZeroOne}[],
+            CI{MOI.VariableIndex, MOI.LessThan{T}}[],
+            CI{MOI.VariableIndex, MOI.GreaterThan{T}}[],
+            CI{MOI.VariableIndex, MOI.ZeroOne}[],
         )
     end
 end
@@ -132,7 +131,11 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
 
     allow_soc::Bool
 
-    function Optimizer{T}(optimizer::OT; lb = -Inf, ub = +Inf, global_precision = 1e-4
+    function Optimizer{T}(
+        optimizer::OT;
+        lb = -Inf,
+        ub = +Inf,
+        global_precision = 1e-4
         ) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
         return new{T, OT}(
@@ -226,6 +229,9 @@ end
 
 # MOI.supports(model::Optimizer, args...) = MOI.supports(model.optimizer, args...)
 
+# TODO, call this on inner solver
+MOI.supports_incremental_interface(::Optimizer) = true
+
 function MOI.supports(model::Optimizer, attr::MOI.VariableName, tp::Type{MOI.VariableIndex})
     MOI.supports(model.optimizer, attr, tp)
 end
@@ -244,7 +250,7 @@ function MOI.supports(model::Optimizer, attr::Union{
     MOI.Silent,
     MOI.NumberOfThreads,
     MOI.TimeLimitSec,
-    MOI.RawParameter,
+    MOI.RawOptimizerAttribute,
 }
 )
     return MOI.supports(model.optimizer, attr)
@@ -254,7 +260,7 @@ function MOI.get(model::Optimizer, attr::Union{
     MOI.Silent,
     MOI.NumberOfThreads,
     MOI.TimeLimitSec,
-    MOI.RawParameter,
+    MOI.RawOptimizerAttribute,
 }
 )
     return MOI.get(model.optimizer, attr)
@@ -271,7 +277,7 @@ end
 
 function MOI.supports(model::Optimizer,
     attr::Union{MOI.ObjectiveSense,
-            MOI.ObjectiveFunction{MOI.SingleVariable},
+            MOI.ObjectiveFunction{MOI.VariableIndex},
             MOI.ObjectiveFunction{MOI.ScalarAffineFunction{T}},
             }) where T
     return MOI.supports(model.optimizer, attr)
@@ -334,12 +340,12 @@ function MOI.supports_add_constrained_variables(
     return MOI.supports_add_constrained_variables(model.optimizer, S)
 end
 
-# function MOI.set(model::Optimizer, param::MOI.RawParameter, value)
+# function MOI.set(model::Optimizer, param::MOI.RawOptimizerAttribute, value)
 #     # if in a subset of the q2b save it
 #     # otherwise pass it forward
 # end
 
-# function MOI.get(model::Optimizer, param::MOI.RawParameter)
+# function MOI.get(model::Optimizer, param::MOI.RawOptimizerAttribute)
 # end
 
 function MOI.Utilities.supports_default_copy_to(model::Optimizer, val::Bool)
@@ -408,7 +414,7 @@ end
 function MOI.set(
     model::Optimizer, attr::MOI.ObjectiveFunction{F}, f::F
 ) where {F <: Union{
-    MOI.SingleVariable,
+    MOI.VariableIndex,
     MOI.ScalarAffineFunction{T}
 }} where T
     model.quad_obj = nothing
@@ -435,8 +441,8 @@ function MOI.get(
             MOI.ObjectiveFunction{MOI.ScalarAffineFunction{T}}()
         )
         MOI.ScalarQuadraticFunction{T}(
-            f.terms,
             MOI.ScalarQuadraticTerm{T}[],
+            f.terms,
             f.constant
         )
     else
@@ -449,7 +455,7 @@ function MOI.get(
         F
         }
 ) where F <: Union{
-    MOI.SingleVariable,
+    MOI.VariableIndex,
     MOI.ScalarAffineFunction{T}
 } where T
     if model.quad_obj !== nothing
@@ -642,7 +648,7 @@ function quad_index(ci::MOI.ConstraintIndex{F, S},
 end
 
 ##
-## SingleVariable-in-Set
+## VariableIndex-in-Set
 ##
 
 _bounds(s::MOI.GreaterThan{Float64}) = (s.lower, Inf)
@@ -696,28 +702,28 @@ function _throw_if_existing_upper(
     end
 end
 function cache_bounds(
-    model::Optimizer, f::MOI.SingleVariable, s::MOI.LessThan{T}) where T
-    info = model.original_variables[f.variable]
-    _throw_if_existing_upper(info.bound, info.type, MOI.LessThan{T}, f.variable)
+    model::Optimizer, f::MOI.VariableIndex, s::MOI.LessThan{T}) where T
+    info = model.original_variables[f]
+    _throw_if_existing_upper(info.bound, info.type, MOI.LessThan{T}, f)
     info.bound = info.bound == GREATER_THAN ? LESS_AND_GREATER_THAN : LESS_THAN
     lb, ub = _bounds(s)
     info.upper = ub
     return
 end
 function cache_bounds(
-    model::Optimizer, f::MOI.SingleVariable, s::MOI.GreaterThan{T}) where T
-    info = model.original_variables[f.variable]
-    _throw_if_existing_lower(info.bound, info.type, MOI.GreaterThan{T}, f.variable)
+    model::Optimizer, f::MOI.VariableIndex, s::MOI.GreaterThan{T}) where T
+    info = model.original_variables[f]
+    _throw_if_existing_lower(info.bound, info.type, MOI.GreaterThan{T}, f)
     info.bound = info.bound == LESS_THAN ? LESS_AND_GREATER_THAN : GREATER_THAN
     lb, ub = _bounds(s)
     info.lower = lb
     return
 end
 function cache_bounds(
-    model::Optimizer, f::MOI.SingleVariable, s::MOI.EqualTo{T}) where T
-    info = model.original_variables[f.variable]
-    _throw_if_existing_lower(info.bound, info.type, MOI.EqualTo{T}, f.variable)
-    _throw_if_existing_upper(info.bound, info.type, MOI.EqualTo{T}, f.variable)
+    model::Optimizer, f::MOI.VariableIndex, s::MOI.EqualTo{T}) where T
+    info = model.original_variables[f]
+    _throw_if_existing_lower(info.bound, info.type, MOI.EqualTo{T}, f)
+    _throw_if_existing_upper(info.bound, info.type, MOI.EqualTo{T}, f)
     info.bound = EQUAL_TO
     lb, ub = _bounds(s)
     info.lower = lb
@@ -725,10 +731,10 @@ function cache_bounds(
     return
 end
 function cache_bounds(
-    model::Optimizer, f::MOI.SingleVariable, s::MOI.Interval{T}) where T
-    info = model.original_variables[f.variable]
-    _throw_if_existing_lower(info.bound, info.type, MOI.Interval{T}, f.variable)
-    _throw_if_existing_upper(info.bound, info.type, MOI.Interval{T}, f.variable)
+    model::Optimizer, f::MOI.VariableIndex, s::MOI.Interval{T}) where T
+    info = model.original_variables[f]
+    _throw_if_existing_lower(info.bound, info.type, MOI.Interval{T}, f)
+    _throw_if_existing_upper(info.bound, info.type, MOI.Interval{T}, f)
     info.bound = INTERVAL
     lb, ub = _bounds(s)
     info.lower = lb
@@ -745,10 +751,9 @@ function MOI.add_constrained_variables(
         model.original_variables[v] = VariableInfo()
     end
     # from add con
-    f = MOI.SingleVariable.(vs)
-    for i in eachindex(f)
-        cache_bounds(model, f[i], s[i])
-        model.ci_to_var[c[i]] = f[i].variable
+    for i in eachindex(vs)
+        cache_bounds(model, vs[i], s[i])
+        model.ci_to_var[c[i]] = vs[i]
     end
     return vs, c
 end
@@ -759,40 +764,39 @@ function MOI.add_constrained_variable(
     # from add var
     model.original_variables[v] = VariableInfo()
     # from add con
-    f = MOI.SingleVariable(v)
-    cache_bounds(model, f, s)
-    model.ci_to_var[ci] = f.variable
+    cache_bounds(model, v, s)
+    model.ci_to_var[ci] = v
     return v, ci
 end
 
 function MOI.add_constraints(
-    model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
+    model::Optimizer, f::Vector{MOI.VariableIndex}, s::Vector{S}
 ) where {S <: SCALAR_SETS}
     c = MOI.add_constraints(model.optimizer, f, s)
     for i in eachindex(f)
         cache_bounds(model, f[i], s[i])
-        model.ci_to_var[c[i]] = f[i].variable
+        model.ci_to_var[c[i]] = f[i]
     end
     return c
 end
 function MOI.add_constraint(
-    model::Optimizer, f::MOI.SingleVariable, s::S
+    model::Optimizer, f::MOI.VariableIndex, s::S
 ) where {S <: SCALAR_SETS}
     ci = MOI.add_constraint(model.optimizer, f, s)
     cache_bounds(model, f, s)
-    model.ci_to_var[ci] = f.variable
+    model.ci_to_var[ci] = f
     return ci
 end
 
 function MOI.set(
     model::Optimizer, ::MOI.ConstraintFunction,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, <:Any}, ::MOI.SingleVariable
+    c::MOI.ConstraintIndex{MOI.VariableIndex, <:Any}, ::MOI.VariableIndex
 )
-    return throw(MOI.SettingSingleVariableFunctionNotAllowed())
+    return throw(MOI.SettingVariableIndexNotAllowed())
 end
 function MOI.set(
     model::Optimizer, ::MOI.ConstraintSet,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, S}, s::S
+    c::MOI.ConstraintIndex{MOI.VariableIndex, S}, s::S
 ) where S<:Union{MOI.Interval{T}, MOI.EqualTo{T}} where T
     MOI.throw_if_not_valid(model.optimizer, c)
     MOI.set(model.optimizer, MOI.ConstraintSet(), c, s)
@@ -805,7 +809,7 @@ function MOI.set(
 end
 function MOI.set(
     model::Optimizer, ::MOI.ConstraintSet,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, S}, s::S
+    c::MOI.ConstraintIndex{MOI.VariableIndex, S}, s::S
 ) where S<:Union{MOI.LessThan{T}} where T
     MOI.throw_if_not_valid(model.optimizer, c)
     MOI.set(model.optimizer, MOI.ConstraintSet(), c, s)
@@ -817,7 +821,7 @@ function MOI.set(
 end
 function MOI.set(
     model::Optimizer, ::MOI.ConstraintSet,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, S}, s::S
+    c::MOI.ConstraintIndex{MOI.VariableIndex, S}, s::S
 ) where S<:Union{MOI.GreaterThan{T}} where T
     MOI.throw_if_not_valid(model.optimizer, c)
     MOI.set(model.optimizer, MOI.ConstraintSet(), c, s)
@@ -830,7 +834,7 @@ end
 
 
 function MOI.delete(model::Optimizer,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, MOI.LessThan{T}}
+    c::MOI.ConstraintIndex{MOI.VariableIndex, MOI.LessThan{T}}
 ) where T
     MOI.throw_if_not_valid(model.optimizer, c)
     var = model.ci_to_var[c]
@@ -842,7 +846,7 @@ function MOI.delete(model::Optimizer,
     return
 end
 function MOI.delete(model::Optimizer,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, MOI.GreaterThan{T}}
+    c::MOI.ConstraintIndex{MOI.VariableIndex, MOI.GreaterThan{T}}
 ) where T
     MOI.throw_if_not_valid(model.optimizer, c)
     var = model.ci_to_var[c]
@@ -854,7 +858,7 @@ function MOI.delete(model::Optimizer,
     return
 end
 function MOI.delete(model::Optimizer,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, S}
+    c::MOI.ConstraintIndex{MOI.VariableIndex, S}
 ) where S<:Union{MOI.Interval{T}, MOI.EqualTo{T}} where T
     MOI.throw_if_not_valid(model.optimizer, c)
     var = model.ci_to_var[c]
@@ -879,13 +883,10 @@ function MOI.add_constrained_variables(
         model.original_variables[v] = VariableInfo()
     end
     # from add con
-    f = MOI.SingleVariable.(vs)
-    for i in eachindex(f)
-        info = model.original_variables[f[i].variable]
+    for i in eachindex(vs)
+        info = model.original_variables[vs[i]]
         info.type = scalar_type(S)
-    end
-    for i in eachindex(c)
-        model.ci_to_var[c[i]] = f[i].variable
+        model.ci_to_var[c[i]] = vs[i]
     end
     return vs, c
 end
@@ -896,45 +897,44 @@ function MOI.add_constrained_variable(
     # from add var
     model.original_variables[v] = VariableInfo()
     # from add con
-    f = MOI.SingleVariable(v)
-    info = model.original_variables[f.variable]
+    info = model.original_variables[v]
     info.type = scalar_type(S)
-    model.ci_to_var[ci] = f.variable
+    model.ci_to_var[ci] = v
     return v, ci
 end
 
 function MOI.add_constraints(
-    model::Optimizer, f::Vector{MOI.SingleVariable}, s::Vector{S}
+    model::Optimizer, f::Vector{MOI.VariableIndex}, s::Vector{S}
 ) where {S <: SCALAR_TYPES}
     c = MOI.add_constraints(model.optimizer, f, s)
     for i in eachindex(f)
-        info = model.original_variables[f[i].variable]
+        info = model.original_variables[f[i]]
         if info.type != BINARY && info.type != INTEGER
             info.type = scalar_type(S)
         else
-            error("Variable $(f[i].variable) is already of type $(info.type)")
+            error("Variable $(f[i]) is already of type $(info.type)")
         end
     end
     for i in eachindex(c)
-        model.ci_to_var[c[i]] = f[i].variable
+        model.ci_to_var[c[i]] = f[i]
     end
     return c
 end
 function MOI.add_constraint(
-    model::Optimizer, f::MOI.SingleVariable, s::S
+    model::Optimizer, f::MOI.VariableIndex, s::S
 ) where {S <: SCALAR_TYPES}
     ci = MOI.add_constraint(model.optimizer, f, s)
-    info = model.original_variables[f.variable]
+    info = model.original_variables[f]
     if info.type != BINARY && info.type != INTEGER
         info.type = scalar_type(S)
     else
-        error("Variable $(f.variable) is already of type $(info.type)")
+        error("Variable $(f) is already of type $(info.type)")
     end
-    model.ci_to_var[ci] = f.variable
+    model.ci_to_var[ci] = f
     return ci
 end
 function MOI.delete(model::Optimizer,
-    c::MOI.ConstraintIndex{MOI.SingleVariable, S}
+    c::MOI.ConstraintIndex{MOI.VariableIndex, S}
 ) where S<:SCALAR_TYPES
     MOI.throw_if_not_valid(model.optimizer, c)
     var = model.ci_to_var[c]
@@ -969,19 +969,19 @@ function add_and_cache_constraints(ch, optimizer,
     return cis
 end
 function add_and_cache_constraints(ch, optimizer,
-    f::Vector{MOI.SingleVariable}, s::Vector{MOI.LessThan{T}}) where T
+    f::Vector{MOI.VariableIndex}, s::Vector{MOI.LessThan{T}}) where T
     cis = MOI.add_constraints(optimizer, f, s)
     append!(ch.sv_lt, cis)
     return cis
 end
 function add_and_cache_constraints(ch, optimizer,
-    f::Vector{MOI.SingleVariable}, s::Vector{MOI.GreaterThan{T}}) where T
+    f::Vector{MOI.VariableIndex}, s::Vector{MOI.GreaterThan{T}}) where T
     cis = MOI.add_constraints(optimizer, f, s)
     append!(ch.sv_gt, cis)
     return cis
 end
 function add_and_cache_constraints(ch, optimizer,
-    f::Vector{MOI.SingleVariable}, s::Vector{MOI.ZeroOne})
+    f::Vector{MOI.VariableIndex}, s::Vector{MOI.ZeroOne})
     cis = MOI.add_constraints(optimizer, f, s)
     append!(ch.sv_zo, cis)
     return cis
@@ -1195,12 +1195,12 @@ function build_approximation!(model::Optimizer)
     c29 = add_and_cache_constraints(ch, model.optimizer, f29, s29)
 
     # eq 30 - bound on \Delta xj
-    f30a = SV[]
-    f30b = SV[]
+    f30a = MOI.VariableIndex[]
+    f30b = MOI.VariableIndex[]
     s30b = LT{T}[]
     for xj in DS
-        push!(f30a, MOI.SingleVariable(Δx[xj]))
-        push!(f30b, MOI.SingleVariable(Δx[xj]))
+        push!(f30a, Δx[xj])
+        push!(f30b, Δx[xj])
         push!(s30b, MOI.LessThan{T}(T(2)^(-T(get_precision(model, xj)))))
     end
     s30a = MOI.GreaterThan{T}[MOI.GreaterThan{T}(zero(T)) for i in eachindex(f30a)]
@@ -1325,10 +1325,10 @@ function build_approximation!(model::Optimizer)
     c34b = add_and_cache_constraints(ch, model.optimizer, f34b, s34b)
 
     # 37 - z is binary
-    f37 = SV[]
+    f37 = MOI.VariableIndex[]
     s37 = MOI.ZeroOne[]
     for zj in values(z), zjl in zj
-        push!(f37, MOI.SingleVariable(zjl))
+        push!(f37, zjl)
         push!(s37, MOI.ZeroOne())
     end
     c37 = add_and_cache_constraints(ch, model.optimizer, f37, s37)
@@ -1393,7 +1393,7 @@ function MOI.get(
     attr::MOI.ListOfConstraintIndices{F, S}
 ) where {S, F<:Union{
     MOI.VectorOfVariables,
-    MOI.SingleVariable,
+    MOI.VariableIndex,
 }}
     return MOI.get(model.optimizer, attr)
 end
@@ -1520,9 +1520,9 @@ function MOI.get(model::Optimizer, ::MOI.NumberOfConstraints{F, S}) where {F, S}
     return length(MOI.get(model, MOI.ListOfConstraintIndices{F,S}()))
 end
 
-function MOI.get(model::Optimizer, ::MOI.ListOfConstraints)
+function MOI.get(model::Optimizer, ::MOI.ListOfConstraintTypesPresent)
     constraints = Set{Tuple{DataType, DataType}}()
-    inner_ctrs = MOI.get(model.optimizer, MOI.ListOfConstraints())
+    inner_ctrs = MOI.get(model.optimizer, MOI.ListOfConstraintTypesPresent())
     for (F, S) in inner_ctrs
         if F <: Union{MOI.ScalarAffineFunction, MOI.VectorQuadraticFunction}
             if MOI.get(model, MOI.NumberOfConstraints{F, S}()) > 0
@@ -1541,7 +1541,7 @@ function MOI.get(model::Optimizer, ::MOI.ListOfConstraints)
 end
 
 function ordered_term_indices(t::MOI.ScalarQuadraticTerm)
-    return VI.(minmax(t.variable_index_1.value, t.variable_index_2.value))
+    return VI.(minmax(t.variable_1.value, t.variable_2.value))
 end
 function ordered_term_indices(t::Union{MOI.VectorAffineTerm, MOI.VectorQuadraticTerm})
     return (t.output_index, ordered_term_indices(t.scalar_term)...)

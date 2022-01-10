@@ -22,7 +22,7 @@ MIP solvers such as [Cbc](https://github.com/JuliaOpt/Cbc.jl), [CPLEX](https://g
 
 ## Example
 
-If one wants to solve the optimization problem with the package:
+If one wants to solve the optimization problem with this package:
 
 ```julia
 # Max 2x + y
@@ -32,9 +32,9 @@ If one wants to solve the optimization problem with the package:
 
 One should model as a quadratic program and simply wrap the solver with a
 `QuadraticToBinary.Optimizer`, with one extra requirement: all variables appearing
-in quadratic terms must be bounded above an below.
+in quadratic terms must be bounded above and below.
 
-Therefore the new model can be:
+Therefore, the new model can be:
 
 
 ```julia
@@ -52,17 +52,9 @@ using MathOptInterface
 using QuadraticToBinary
 using Cbc
 
-const MOI = MathOptInterface
-const MOIU = MOI.Utilities
-
-const optimizer = MOI.Bridges.full_bridge_optimizer(
-    MOIU.CachingOptimizer(
-        MOIU.UniversalFallback(MOIU.Model{Float64}()),
-        Cbc.Optimizer()), Float64)
-
 model = Model(
     ()->QuadraticToBinary.Optimizer{Float64}(
-        optimizer))
+        MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)))
 
 @variable(model, 1 <= x <= 10)
 @variable(model, 1 <= y <= 10)
@@ -79,10 +71,10 @@ primal_status(model)
 
 objective_value(model) # ≈ 9.0
 
-value(x) # ≈ 4.0
-value(y) # ≈ 1.0
+@assert value(x) ≈ 4.0
+@assert value(y) ≈ 1.0
 
-value(c) # ≈ 4.0
+@assert value(c) ≈ 4.0
 ```
 
 ### MathOptInterface with Cbc solver
@@ -91,48 +83,46 @@ value(c) # ≈ 4.0
 using MathOptInterface
 using QuadraticToBinary
 const MOI = MathOptInterface
-const MOIU = MOI.Utilities
 using Cbc
 
-const optimizer = MOI.Bridges.full_bridge_optimizer(
-    MOIU.CachingOptimizer(
-        MOIU.UniversalFallback(MOIU.Model{Float64}()),
-        Cbc.Optimizer()), Float64)
+optimizer = MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)
 
 model = QuadraticToBinary.Optimizer{Float64}(optimizer)
 
 x = MOI.add_variable(model)
 y = MOI.add_variable(model)
 
-MOI.add_constraint(model, MOI.SingleVariable(x), MOI.GreaterThan(1.0))
-MOI.add_constraint(model, MOI.SingleVariable(y), MOI.GreaterThan(1.0))
+MOI.add_constraint(model, x, MOI.GreaterThan(1.0))
+MOI.add_constraint(model, y, MOI.GreaterThan(1.0))
 
-MOI.add_constraint(model, MOI.SingleVariable(x), MOI.LessThan(10.0))
-MOI.add_constraint(model, MOI.SingleVariable(y), MOI.LessThan(10.0))
+MOI.add_constraint(model, x, MOI.LessThan(10.0))
+MOI.add_constraint(model, y, MOI.LessThan(10.0))
 
-cf = MOI.ScalarQuadraticFunction(
-    [MOI.ScalarAffineTerm(0.0, x)], [MOI.ScalarQuadraticTerm(1.0, x, y)], 0.0)
-c = MOI.add_constraint(model, cf, MOI.LessThan(4.0))
+c = MOI.add_constraint(model, 1.0 * x * y, MOI.LessThan(4.0))
 
 MOI.set(model, MOI.ObjectiveFunction{MOI.ScalarAffineFunction{Float64}}(),
-    MOI.ScalarAffineFunction(MOI.ScalarAffineTerm.([2.0, 1.0], [x, y]), 0.0))
+    2.0 * x + y)
 MOI.set(model, MOI.ObjectiveSense(), MOI.MAX_SENSE)
 
 MOI.optimize!(model)
 
-MOI.get(model, MOI.TerminationStatus()) # config.optimal_status
+@assert MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMAL
 
-MOI.get(model, MOI.PrimalStatus()) # MOI.FEASIBLE_POINT
+@assert MOI.get(model, MOI.PrimalStatus()) == MOI.FEASIBLE_POINT
 
-MOI.get(model, MOI.ObjectiveValue()) # ≈ 9.0
+@assert MOI.get(model, MOI.ObjectiveValue()) ≈ 9.0
 
-MOI.get(model, MOI.VariablePrimal(), x) # ≈ 4.0
-MOI.get(model, MOI.VariablePrimal(), y) # ≈ 1.0
+@assert MOI.get(model, MOI.VariablePrimal(), x) ≈ 4.0
+@assert MOI.get(model, MOI.VariablePrimal(), y) ≈ 1.0
 
-MOI.get(model, MOI.ConstraintPrimal(), c) # ≈ 4.0
+@assert MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0
 ```
 
 Note that duals are not available because the problem was approximated as a MIP.
+
+## QuadraticToBinary.Optimizer Attributes
+
+### Precision
 
 It is possible to change the precision of the approximations to the number `val`,
 for all variables:
@@ -149,6 +139,8 @@ MOI.set(model, QuadraticToBinary.VariablePrecision(), vi, val)
 
 The precision for each varible will be `val * (UB - LB)`. Where `UB` and `LB` are,
 respectively, the upper and lower bound of the variable.
+
+### Bounds
 
 For the sake of simplicity, the following two attributes are made available:
 `QuadraticToBinary.FallbackUpperBound` and `QuadraticToBinary.FallbackLowerBound`.
