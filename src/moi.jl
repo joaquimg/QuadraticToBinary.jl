@@ -131,7 +131,11 @@ mutable struct Optimizer{T, OT <: MOI.ModelLike} <: MOI.AbstractOptimizer
 
     allow_soc::Bool
 
-    function Optimizer{T}(optimizer::OT; lb = -Inf, ub = +Inf, global_precision = 1e-4
+    function Optimizer{T}(
+        optimizer::OT;
+        lb = -Inf,
+        ub = +Inf,
+        global_precision = 1e-4
         ) where {T, OT <: MOI.ModelLike}
         # TODO optimizer must support binary, and affine in less and greater
         return new{T, OT}(
@@ -788,7 +792,7 @@ function MOI.set(
     model::Optimizer, ::MOI.ConstraintFunction,
     c::MOI.ConstraintIndex{MOI.VariableIndex, <:Any}, ::MOI.VariableIndex
 )
-    return throw(MOI.SettingVariableIndexFunctionNotAllowed())
+    return throw(MOI.SettingVariableIndexNotAllowed())
 end
 function MOI.set(
     model::Optimizer, ::MOI.ConstraintSet,
