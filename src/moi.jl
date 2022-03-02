@@ -229,7 +229,7 @@ end
 
 # MOI.supports(model::Optimizer, args...) = MOI.supports(model.optimizer, args...)
 
-# TODO, call this on inner solver
+# Q2B is always incremental because it uses add_constraint to cacehc onversions
 MOI.supports_incremental_interface(::Optimizer) = true
 
 function MOI.supports(model::Optimizer, attr::MOI.VariableName, tp::Type{MOI.VariableIndex})
@@ -270,6 +270,7 @@ function MOI.set(model::Optimizer, attr::Union{
     MOI.Silent,
     MOI.NumberOfThreads,
     MOI.TimeLimitSec,
+    MOI.RawOptimizerAttribute,
 }, val
 )
     return MOI.set(model.optimizer, attr, val)
@@ -307,8 +308,8 @@ quadratic_type(::Type{MOI.VectorAffineFunction{T}}) where T = MOI.VectorQuadrati
 
 
 function MOI.get(model::Optimizer, ::MOI.SolverName)
-    return "Binary reformulation of quadratic model with solver " *
-        MOI.get(model.optimizer, MOI.SolverName()) * " attached"
+    return "QuadraticToBinary [" *
+        MOI.get(model.optimizer, MOI.SolverName()) * "]"
 end
 
 function MOI.supports_add_constrained_variables(
@@ -340,20 +341,8 @@ function MOI.supports_add_constrained_variables(
     return MOI.supports_add_constrained_variables(model.optimizer, S)
 end
 
-# function MOI.set(model::Optimizer, param::MOI.RawOptimizerAttribute, value)
-#     # if in a subset of the q2b save it
-#     # otherwise pass it forward
-# end
-
-# function MOI.get(model::Optimizer, param::MOI.RawOptimizerAttribute)
-# end
-
-function MOI.Utilities.supports_default_copy_to(model::Optimizer, val::Bool)
-    return true # val # MOI.Utilities.supports_default_copy_to(model.optimizer, val)
-end
-
-function MOI.copy_to(dest::Optimizer, src::MOI.ModelLike; kwargs...)
-    return MOI.Utilities.automatic_copy_to(dest, src; kwargs...)
+function MOI.copy_to(dest::Optimizer, src::MOI.ModelLike)
+    return MOI.Utilities.default_copy_to(dest, src)
 end
 
 
@@ -989,25 +978,14 @@ end
 
 function delete_additional_constraints(model)
     ch = model.index_cache
-    if true
-        MOI.delete(model.optimizer, ch.sa_eq)
-        MOI.delete(model.optimizer, ch.sa_lt)
-        MOI.delete(model.optimizer, ch.sa_gt)
-        MOI.delete(model.optimizer, ch.vi)
-    else
-        for ci in ch.sa_eq
-            MOI.delete(model.optimizer, ci)
-        end
-        for ci in ch.sa_lt
-            MOI.delete(model.optimizer, ci)
-        end
-        for ci in ch.sa_gt
-            MOI.delete(model.optimizer, ci)
-        end
-        for vi in ch.vi
-            MOI.delete(model.optimizer, vi)
-        end
-    end
+    MOI.delete(model.optimizer, ch.sa_eq)
+    MOI.delete(model.optimizer, ch.sa_lt)
+    MOI.delete(model.optimizer, ch.sa_gt)
+    MOI.delete(model.optimizer, ch.sv_zo)
+    MOI.delete(model.optimizer, ch.sv_lt)
+    MOI.delete(model.optimizer, ch.sv_gt)
+    MOI.delete(model.optimizer, ch.vi)
+    return nothing
 end
 
 function lower(model, info)
@@ -1481,7 +1459,8 @@ function MOI.set(
     ::GlobalVariablePrecision,
     value::Union{Nothing, Float64}
 )
-    val = value === nothing ? NaN : value
+    # default global precision is 1e-4
+    val = value === nothing ? 1e-4 : value
     @assert 0 < val <= 1
     model.global_initial_precision = val
     return

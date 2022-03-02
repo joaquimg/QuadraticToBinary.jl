@@ -18,7 +18,7 @@ Non-convex quadratic programs are extremely hard to solve. This problem class ca
 be solved by Global Solvers such as [Couenne](https://projects.coin-or.org/Couenne).
 Another possibility is to rely on binary expasion of products terms that appear in the
 problem, in this case the problem is *approximated* and can be solved by off-the-shelf
-MIP solvers such as [Cbc](https://github.com/JuliaOpt/Cbc.jl), [CPLEX](https://github.com/JuliaOpt/CPLEX.jl), [GLPK](https://github.com/JuliaOpt/GLPK.jl), [Gurobi](https://github.com/JuliaOpt/Gurobi.jl), [Xpress](https://github.com/JuliaOpt/Xpress.jl).
+MIP solvers such as [Cbc](https://github.com/jump-dev/Cbc.jl), [CPLEX](https://github.com/jump-dev/CPLEX.jl), [GLPK](https://github.com/jump-dev/GLPK.jl), [Gurobi](https://github.com/jump-dev/Gurobi.jl), [HiGHS](https://github.com/jump-dev/HiGHS.jl), [Xpress](https://github.com/jump-dev/Xpress.jl).
 
 ## Example
 
@@ -77,15 +77,15 @@ objective_value(model) # ≈ 9.0
 @assert value(c) ≈ 4.0
 ```
 
-### MathOptInterface with Cbc solver
+### MathOptInterface with HiGHS solver
 
 ```julia
 using MathOptInterface
 using QuadraticToBinary
 const MOI = MathOptInterface
-using Cbc
+using HiGHS
 
-optimizer = MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)
+optimizer = MOI.instantiate(HiGHS.Optimizer, with_bridge_type = Float64)
 
 model = QuadraticToBinary.Optimizer{Float64}(optimizer)
 
@@ -118,7 +118,8 @@ MOI.optimize!(model)
 @assert MOI.get(model, MOI.ConstraintPrimal(), c) ≈ 4.0
 ```
 
-Note that duals are not available because the problem was approximated as a MIP.
+Note:
+that duals are not available because the problem was approximated as a MIP.
 
 ## QuadraticToBinary.Optimizer Attributes
 
@@ -139,6 +140,16 @@ MOI.set(model, QuadraticToBinary.VariablePrecision(), vi, val)
 
 The precision for each varible will be `val * (UB - LB)`. Where `UB` and `LB` are,
 respectively, the upper and lower bound of the variable.
+
+Note:
+binary expansion problem can be numerically challenging for high precision. You
+might need to modify solver options accordingly. In the case of HiGHS:
+
+```julia
+tol = 1e-9
+MOI.set(highs_high_tol, MOI.RawOptimizerAttribute("mip_feasibility_tolerance"), tol)
+MOI.set(highs_high_tol, MOI.RawOptimizerAttribute("primal_feasibility_tolerance"), tol)
+```
 
 ### Bounds
 
