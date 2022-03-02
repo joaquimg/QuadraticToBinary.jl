@@ -44,17 +44,17 @@ Therefore, the new model can be:
 #      x, y <= 10
 ```
 
-### JuMP with Cbc solver
+### JuMP with HiGHS solver
 
 ```julia
 using JuMP
 using MathOptInterface
 using QuadraticToBinary
-using Cbc
+using HiGHS
 
 model = Model(
     ()->QuadraticToBinary.Optimizer{Float64}(
-        MOI.instantiate(Cbc.Optimizer, with_bridge_type = Float64)))
+        MOI.instantiate(HiGHS.Optimizer, with_bridge_type = Float64)))
 
 @variable(model, 1 <= x <= 10)
 @variable(model, 1 <= y <= 10)
@@ -147,8 +147,8 @@ might need to modify solver options accordingly. In the case of HiGHS:
 
 ```julia
 tol = 1e-9
-MOI.set(highs_high_tol, MOI.RawOptimizerAttribute("mip_feasibility_tolerance"), tol)
-MOI.set(highs_high_tol, MOI.RawOptimizerAttribute("primal_feasibility_tolerance"), tol)
+MOI.set(model, MOI.RawOptimizerAttribute("mip_feasibility_tolerance"), tol)
+MOI.set(model, MOI.RawOptimizerAttribute("primal_feasibility_tolerance"), tol)
 ```
 
 ### Bounds
