@@ -11,11 +11,3 @@ DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 MathOptInterface = "1"
 DataStructures = "0.17.10, 0.18.0"
 julia = "1.6"
-
-[extras]
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
-
-[targets]
-test = ["Test", "HiGHS"]
-
